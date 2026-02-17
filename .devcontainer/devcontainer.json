@@ -8,7 +8,7 @@
       "extensions": [
         "dbaeumer.vscode-eslint",
         "esbenp.prettier-vscode",
-	"anthropic.claude-coder"
+	"anthropic.claude-code"
       ]
     }
   }

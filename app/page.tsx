@@ -10,27 +10,45 @@ export default function Home() {
 
   const [signinEmail, setSigninEmail] = useState("");
   const [signinPassword, setSigninPassword] = useState("");
+  const [signinError, setSigninError] = useState("");
 
   const [enrollEmail, setEnrollEmail] = useState("");
   const [enrollPassword, setEnrollPassword] = useState("");
+  const [enrollError, setEnrollError] = useState("");
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
   async function handleSignIn() {
-    await fetch(`${apiUrl}/users/login`, {
+    setSigninError("");
+    const res = await fetch(`${apiUrl}/users/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: signinEmail, password: signinPassword }),
     });
+    if (!res.ok) {
+      setSigninError("Wrong username or password");
+      return;
+    }
+    const data = await res.json();
+    if (data?.id) {
+      sessionStorage.setItem("user_id", data.id);
+      sessionStorage.setItem("username", signinEmail);
+    }
     router.push("/dashboard");
   }
 
   async function handleEnroll() {
-    await fetch(`${apiUrl}/users`, {
+    setEnrollError("");
+    const res = await fetch(`${apiUrl}/users`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: enrollEmail, password: enrollPassword }),
     });
+    if (!res.ok) {
+      setEnrollError("Enrollment failed. Please try again.");
+      return;
+    }
+    setView("signin");
   }
 
   return (
@@ -120,6 +138,11 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* Error message */}
+              {signinError && (
+                <p className="text-[12px] text-[#E53935]">{signinError}</p>
+              )}
+
               {/* Forgot password */}
               <div className="flex justify-end">
                 <a href="#" className="text-[12px] font-[500] text-[var(--color-accent)]">Forgot password?</a>
@@ -201,6 +224,11 @@ export default function Home() {
                   />
                 </div>
               </div>
+
+              {/* Error message */}
+              {enrollError && (
+                <p className="text-[12px] text-[#E53935]">{enrollError}</p>
+              )}
 
               {/* Remember + Need help row */}
               <div className="flex items-center justify-between">

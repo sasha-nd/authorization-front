@@ -3,53 +3,103 @@
 import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
 import { ArrowLeft, ChevronDown, X } from "lucide-react";
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 
-const accounts = [
-  { name: "Everyday Checking", number: "•••• 1024", balance: "$12,840.19" },
-  { name: "High Yield Savings", number: "•••• 7781", balance: "$46,100.00" },
-  { name: "Business Reserve", number: "•••• 9043", balance: "$25,350.25" },
-];
+type Transfer = {
+  transfer_id: string;
+  type: string;
+  date: string;
+  amount: number; // cents
+  status: string;
+};
 
-const transactions = [
-  { type: "Coffee Shop", date: "Feb 18, 2026", amount: "-$18.45", positive: false },
-  { type: "Payroll Deposit", date: "Feb 17, 2026", amount: "+$3,150.00", positive: true },
-  { type: "Electric Utility", date: "Feb 15, 2026", amount: "-$126.09", positive: false },
-  { type: "Transfer to Savings", date: "Feb 13, 2026", amount: "-$500.00", positive: false },
-];
+type Account = { account_name: string; account_id: string; current_balance: number };
 
-function accountKey(acc: { name: string; number: string }) {
-  return `${acc.name} ${acc.number}`;
+function formatCents(cents: number): string {
+  return (Math.abs(cents) / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
 function AccountPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const fromParam = searchParams.get("from") || accountKey(accounts[0]);
-  const currentAccount = accounts.find((a) => accountKey(a) === fromParam) ?? accounts[0];
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-  const defaultTo = accounts.find((a) => accountKey(a) !== fromParam) ?? accounts[1];
+  const accountId = searchParams.get("account_id") ?? "";
+  const accountName = searchParams.get("account_name") ?? "";
+  const balance = parseInt(searchParams.get("balance") ?? "0", 10);
+
+  const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
 
   const [showModal, setShowModal] = useState(false);
-  const [transferFrom, setTransferFrom] = useState(fromParam);
-  const [transferTo, setTransferTo] = useState(accountKey(defaultTo));
+  const [transferFrom, setTransferFrom] = useState(accountId);
+  const [transferTo, setTransferTo] = useState("");
+  const [frequency, setFrequency] = useState("one_time");
   const [transferDate, setTransferDate] = useState("2026-02-20");
   const [amount, setAmount] = useState("500.00");
+
+  useEffect(() => {
+    const userId = sessionStorage.getItem("user_id");
+    if (!userId || !accountId) return;
+
+    fetch(`${apiUrl}/users/${userId}/accounts/${accountId}/transfers`)
+      .then((res) => res.json())
+      .then((data: Transfer[]) => setTransfers(data))
+      .catch(() => {});
+
+    fetch(`${apiUrl}/users/${userId}/accounts`)
+      .then((res) => res.json())
+      .then((data: Account[]) => {
+        setAccounts(data);
+        const other = data.find((a) => a.account_id !== accountId);
+        if (other) setTransferTo(other.account_id);
+      })
+      .catch(() => {});
+  }, [apiUrl, accountId]);
 
   function handleTransferFromChange(value: string) {
     setTransferFrom(value);
     if (transferTo === value) {
-      const alt = accounts.find((a) => accountKey(a) !== value);
-      setTransferTo(alt ? accountKey(alt) : "");
+      const alt = accounts.find((a) => a.account_id !== value);
+      setTransferTo(alt ? alt.account_id : "");
     }
   }
 
-  const transferToOptions = accounts.filter((a) => accountKey(a) !== transferFrom);
+  const transferToOptions = accounts.filter((a) => a.account_id !== transferFrom);
+
+  async function handleTransfer() {
+    const userId = sessionStorage.getItem("user_id");
+    if (!userId || !transferTo) return;
+
+    await fetch(`${apiUrl}/users/${userId}/accounts/${transferFrom}/transfers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        control: {
+          user_id: userId,
+          date: new Date().toISOString().split("T")[0],
+        },
+        body: {
+          to_account: transferTo,
+          frequency,
+          transfer_date: transferDate,
+          amount: Math.round((parseFloat(amount) || 0) * 100),
+          type: "Transfer",
+        },
+      }),
+    });
+
+    fetch(`${apiUrl}/users/${userId}/accounts/${accountId}/transfers`)
+      .then((res) => res.json())
+      .then((data: Transfer[]) => setTransfers(data))
+      .catch(() => {});
+
+    setShowModal(false);
+  }
 
   return (
-    <div className="min-h-screen font-inter" style={{ backgroundColor: "#F7F8FA" }}>
-      <div className="max-w-[820px] mx-auto py-8 px-4">
+    <div className="max-w-[820px] mx-auto py-8 px-4">
 
         {/* Back link */}
         <button
@@ -97,13 +147,13 @@ function AccountPageContent() {
             {/* Top row */}
             <div className="flex items-center justify-between">
               <span className="font-semibold" style={{ fontSize: 14, color: "#FFFFFF", width: 220 }}>
-                {currentAccount.name}
+                {accountName}
               </span>
               <span
                 className="font-mono-jetbrains text-right"
                 style={{ fontSize: 12, color: "#9CA3AF", width: 140 }}
               >
-                {currentAccount.number}
+                Acct {accountId}
               </span>
             </div>
 
@@ -116,7 +166,7 @@ function AccountPageContent() {
                 className="font-mono-jetbrains font-semibold"
                 style={{ fontSize: 36, color: "#FFFFFF" }}
               >
-                {currentAccount.balance}
+                {formatCents(balance)}
               </span>
               <button
                 onClick={() => setShowModal(true)}
@@ -154,46 +204,59 @@ function AccountPageContent() {
               <span className="font-semibold" style={{ fontSize: 12, color: "#6B7280", width: 180 }}>
                 Date
               </span>
+              <span className="font-semibold" style={{ fontSize: 12, color: "#6B7280", flex: 1 }}>
+                Status
+              </span>
               <span
-                className="font-semibold text-right flex-1"
-                style={{ fontSize: 12, color: "#6B7280" }}
+                className="font-semibold text-right"
+                style={{ fontSize: 12, color: "#6B7280", width: 120 }}
               >
                 Amount
               </span>
             </div>
 
             {/* Rows */}
-            {transactions.map((tx) => (
-              <div
-                key={tx.type}
-                className="flex items-center"
-                style={{
-                  height: 44,
-                  padding: "0 12px",
-                  borderBottom: "1px solid #E6E8EC",
-                }}
-              >
-                <span style={{ fontSize: 13, color: "#0B1220", width: 220 }}>
-                  {tx.type}
-                </span>
-                <span
-                  className="font-mono-jetbrains"
-                  style={{ fontSize: 12, color: "#6B7280", width: 180 }}
-                >
-                  {tx.date}
-                </span>
-                <span
-                  className="font-mono-jetbrains font-medium text-right flex-1"
-                  style={{ fontSize: 13, color: tx.positive ? "#047857" : "#0B1220" }}
-                >
-                  {tx.amount}
-                </span>
-              </div>
-            ))}
+            {transfers.length === 0 ? (
+              <span style={{ fontSize: 13, color: "#9CA3AF", padding: "12px 12px" }}>
+                No transactions found.
+              </span>
+            ) : (
+              transfers.map((tx) => {
+                const positive = tx.amount >= 0;
+                return (
+                  <div
+                    key={tx.transfer_id}
+                    className="flex items-center"
+                    style={{
+                      height: 44,
+                      padding: "0 12px",
+                      borderBottom: "1px solid #E6E8EC",
+                    }}
+                  >
+                    <span style={{ fontSize: 13, color: "#0B1220", width: 220 }}>
+                      {tx.type}
+                    </span>
+                    <span
+                      className="font-mono-jetbrains"
+                      style={{ fontSize: 12, color: "#6B7280", width: 180 }}
+                    >
+                      {tx.date.slice(0, 10)}
+                    </span>
+                    <span style={{ fontSize: 12, color: "#6B7280", flex: 1 }}>
+                      {tx.status}
+                    </span>
+                    <span
+                      className="font-mono-jetbrains font-medium text-right"
+                      style={{ fontSize: 13, color: positive ? "#047857" : "#0B1220", width: 120 }}
+                    >
+                      {positive ? "+" : "-"}{formatCents(tx.amount)}
+                    </span>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
-
-      </div>
 
       {/* Transfer Money Modal */}
       {showModal && (
@@ -245,8 +308,8 @@ function AccountPageContent() {
                     style={{ padding: "0 36px 0 14px", fontSize: 13, color: "#111827" }}
                   >
                     {accounts.map((acc) => (
-                      <option key={acc.number} value={accountKey(acc)}>
-                        {acc.name} {acc.number}
+                      <option key={acc.account_id} value={acc.account_id}>
+                        {acc.account_name} — Acct {acc.account_id}
                       </option>
                     ))}
                   </select>
@@ -271,8 +334,8 @@ function AccountPageContent() {
                     style={{ padding: "0 36px 0 14px", fontSize: 13, color: "#111827" }}
                   >
                     {transferToOptions.map((acc) => (
-                      <option key={acc.number} value={accountKey(acc)}>
-                        {acc.name} {acc.number}
+                      <option key={acc.account_id} value={acc.account_id}>
+                        {acc.account_name} — Acct {acc.account_id}
                       </option>
                     ))}
                   </select>
@@ -289,12 +352,23 @@ function AccountPageContent() {
                 <span className="font-semibold" style={{ fontSize: 12, color: "#374151" }}>
                   Frequency
                 </span>
-                <div
-                  className="flex items-center justify-between bg-white"
-                  style={{ height: 46, padding: "0 14px", border: "1px solid #D1D5DB" }}
-                >
-                  <span style={{ fontSize: 13, color: "#111827" }}>One time</span>
-                  <ChevronDown size={14} color="#6B7280" />
+                <div className="relative" style={{ height: 46, border: "1px solid #D1D5DB" }}>
+                  <select
+                    value={frequency}
+                    onChange={(e) => setFrequency(e.target.value)}
+                    className="appearance-none w-full h-full bg-white outline-none font-inter"
+                    style={{ padding: "0 36px 0 14px", fontSize: 13, color: "#111827" }}
+                  >
+                    <option value="one_time">One time</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Biweekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                  <ChevronDown
+                    size={14}
+                    color="#6B7280"
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  />
                 </div>
               </div>
 
@@ -347,14 +421,15 @@ function AccountPageContent() {
             </div>
 
             {/* Send button */}
-            <div
-              className="flex items-center justify-center"
+            <button
+              onClick={handleTransfer}
+              className="flex items-center justify-center hover:opacity-80 transition-opacity"
               style={{ backgroundColor: "#0B1220", height: 42, width: 140 }}
             >
               <span className="font-medium" style={{ fontSize: 13, color: "#FFFFFF" }}>
                 Send
               </span>
-            </div>
+            </button>
           </div>
         </div>
       )}

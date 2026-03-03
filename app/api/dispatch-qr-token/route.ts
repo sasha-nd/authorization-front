@@ -7,6 +7,9 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const username = body.username;
+    // If a custom message is provided (e.g. for transfers), use it.
+    // Otherwise fall back to the default profile-modification message.
+    const message: string = body.message ?? "approve modification of user properties?";
     if (!username) {
       return NextResponse.json({ error: "Missing username" }, { status: 400 });
     }
@@ -47,7 +50,7 @@ export async function POST(request: Request) {
           transaction: [
             {
               contentType: "text/plain",
-              content: Buffer.from("approve modification of user properties?").toString("base64"),
+              content: Buffer.from(message).toString("base64"),
             },
           ],
         }),
@@ -70,7 +73,7 @@ export async function POST(request: Request) {
     }
 
     // 3️⃣ Send push notification to user's authenticator app
-    const pushMessage = "approve modification of user properties?";
+    const pushMessage = message;
     const pushPayload = {
       dispatchTargetId,
       dispatcher: "firebase-cloud-messaging",

@@ -2,23 +2,22 @@
 
 import { signOut } from "next-auth/react";
 
-export default function LogoutButton() {
-  const handleLogout = async () => {
-    await signOut({ redirect: false });
+interface LogoutButtonProps {
+  className?: string;
+}
 
-    const nevisLogoutUrl =
-      "https://login.national-digital.getnevis.net/?logout";
+export async function handleLogout() {
+  await signOut({ redirect: false });
+  const nevisLogoutUrl = process.env.NEXT_PUBLIC_NEVIS_LOGOUT_URL ?? "https://login.national-digital.getnevis.net/?logout";
+  const returnUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  window.location.href = `${nevisLogoutUrl}&redirectUrl=${encodeURIComponent(returnUrl)}`;
+}
 
-    const returnUrl = "http://localhost:3000";
-
-    window.location.href =
-      `${nevisLogoutUrl}&redirectUrl=${encodeURIComponent(returnUrl)}`;
-  };
-
+export default function LogoutButton({ className }: LogoutButtonProps) {
   return (
     <button
       onClick={handleLogout}
-      className="mt-2 bg-red-500 text-white px-4 py-2 rounded"
+      className={className ?? "bg-red-600 px-3 py-1 text-sm font-medium text-white hover:bg-red-700 transition-colors"}
     >
       Logout
     </button>

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useSession, signOut } from "next-auth/react";
+import { useSession } from "next-auth/react";
 
 export default function ProfilePage() {
   const [dispatchTargetId, setDispatchTargetId] = useState<string | null>(null);
@@ -175,13 +175,6 @@ export default function ProfilePage() {
           />
         </label>
         <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
-          <button
-            type="button"
-            onClick={() => signOut()}
-            style={{ padding: "0.5rem 1rem", backgroundColor: "#e53e3e", color: "#fff", borderRadius: "4px" }}
-          >
-            Logout
-          </button>
           {!editing ? (
             <button
               type="button"

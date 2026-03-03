@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { QRCode } from "qrcode.react";
-import { useSession, signOut } from "next-auth/react";
+import { useSession } from "next-auth/react";
 
 export default function DashboardPage() {
   const { data: session } = useSession();
@@ -191,7 +191,6 @@ export default function DashboardPage() {
           <input type="text" name="address" value={editData.address} onChange={handleFieldChange} disabled={pendingConfirmation} />
         </label>
         <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
-          <button type="button" onClick={() => signOut()} style={{ padding: "0.5rem 1rem", backgroundColor: "#e53e3e", color: "#fff", borderRadius: "4px" }}>Logout</button>
           <button type="button" onClick={handleEdit} style={{ padding: "0.5rem 1rem", backgroundColor: "#38a169", color: "#fff", borderRadius: "4px" }} disabled={pendingConfirmation}>Edit</button>
           <button type="button" onClick={handleGenerateQR} style={{ padding: "0.5rem 1rem", backgroundColor: "#3182ce", color: "#fff", borderRadius: "4px" }} disabled={saving || pendingConfirmation}>{saving ? "Generating..." : "Save & Confirm via QR"}</button>
         </div>

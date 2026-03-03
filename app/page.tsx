@@ -3,16 +3,29 @@
 import { useSession, signIn } from "next-auth/react";
 import { Landmark } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import LogoutButton from "@/app/components/LogoutButton";
 
 export default function LandingPage() {
   const { data: session } = useSession();
   const router = useRouter();
 
-  const handleLogin = () => signIn("nevis");
+  // Redirect once the session is fully loaded (scopes present)
+  useEffect(() => {
+    if (!session) return;
+    const scopes: string[] = (session as any).scopes ?? [];
+    // Wait until the JWT callback has populated scopes before deciding
+    // (scopes is [] on the very first render tick — skip that frame)
+    if (scopes.length === 0 && !session.user?.sub) return;
 
-  const goToTransactions = () => router.push("/dashboard/transactions");
-  const goToProfile = () => router.push("/dashboard/profile");
+    if (scopes.includes("support")) {
+      router.replace("/support");
+    } else {
+      router.replace("/dashboard");
+    }
+  }, [session, router]);
+
+  const handleLogin = () => signIn("nevis");
 
   return (
     <div className="flex h-screen w-full flex-col bg-zinc-100 font-inter">
@@ -59,27 +72,24 @@ export default function LandingPage() {
                   Sign In with Nevis
                 </button>
               </>
-            ) : (
+            ) : (session as any).scopes?.includes("support") ? (
               <>
                 <h2 className="text-[32px] font-semibold text-black">
                   Welcome, {session.user?.name || session.user?.email}
                 </h2>
-
+                <p className="text-[13px] text-[#777777]">You are logged in as a support agent.</p>
                 <div className="flex flex-col gap-4 mt-4">
                   <button
-                    onClick={goToTransactions}
-                    className="h-10 w-60 bg-red-600 text-white font-medium hover:bg-red-500 transition-colors"
+                    onClick={() => router.push("/support")}
+                    className="h-10 w-60 bg-black text-white font-medium hover:bg-zinc-800 transition-colors"
                   >
-                    Transactions
-                  </button>
-                  <button
-                    onClick={goToProfile}
-                    className="h-10 w-60 bg-blue-600 text-white font-medium hover:bg-blue-500 transition-colors"
-                  >
-                    Profile
+                    Support Portal
                   </button>
                 </div>
               </>
+            ) : (
+              /* Regular users are auto-redirected to /dashboard via useEffect above */
+              <span style={{ fontSize: 13, color: "#9CA3AF" }}>Redirecting…</span>
             )}
           </div>
         </div>

@@ -38,6 +38,30 @@ export default function TransactionsPage() {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [loadingData, setLoadingData] = useState(true);
 
+  // Balance in cents — sourced from /api/balance (our own backend)
+  const [localBalanceCents, setLocalBalanceCents] = useState<number | null>(null);
+
+  // ── Fetch balance from our backend on mount ──
+  useEffect(() => {
+    if (!session?.user?.sub) return;
+    fetch("/api/balance")
+      .then((r) => r.json())
+      .then((d) => {
+        if (typeof d.balanceCents === "number") setLocalBalanceCents(d.balanceCents);
+      })
+      .catch(() => {});
+  }, [session?.user?.sub]);
+
+  // ── Persist balance change to backend ──
+  async function saveBalance(cents: number) {
+    setLocalBalanceCents(cents);
+    await fetch("/api/balance", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ balanceCents: cents }),
+    }).catch(() => {});
+  }
+
   // Transfer modal
   const [showModal, setShowModal] = useState(false);
   const [recipient, setRecipient] = useState("");
@@ -51,6 +75,7 @@ export default function TransactionsPage() {
   const [pendingConfirmation, setPendingConfirmation] = useState(false);
   const [sending, setSending] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   // Fetch dispatch target
   useEffect(() => {
@@ -61,7 +86,7 @@ export default function TransactionsPage() {
       .catch(() => {});
   }, [session?.user?.sub]);
 
-  // Fetch accounts + all transfers
+  // Fetch accounts + all transfers (only runs when apiUrl is configured)
   useEffect(() => {
     const userId = session?.user?.sub ?? sessionStorage.getItem("user_id");
     if (!userId || !apiUrl) return;
@@ -71,6 +96,11 @@ export default function TransactionsPage() {
       .then((r) => r.json())
       .then(async (accs: Account[]) => {
         setAccounts(accs);
+        const apiTotal = accs.reduce((s, a) => s + a.current_balance, 0);
+        // Only override the persisted balance if the API returns a real positive value
+        if (apiTotal > 0) {
+          setLocalBalanceCents(apiTotal);
+        }
         // Collect transfers from all accounts
         const allTransfers = await Promise.all(
           accs.map((acc) =>
@@ -80,7 +110,6 @@ export default function TransactionsPage() {
           )
         );
         const flat: Transfer[] = allTransfers.flat();
-        // Sort newest first by date
         flat.sort(
           (a, b) =>
             new Date(b.transfer_date).getTime() - new Date(a.transfer_date).getTime()
@@ -91,13 +120,17 @@ export default function TransactionsPage() {
       .finally(() => setLoadingData(false));
   }, [session?.user?.sub, apiUrl]);
 
-  const totalBalance = accounts.reduce((sum, a) => sum + a.current_balance, 0);
+  const totalBalance =
+    localBalanceCents !== null
+      ? localBalanceCents
+      : accounts.reduce((sum, a) => sum + a.current_balance, 0);
 
   function resetModal() {
     setRecipient("");
     setAmount("");
     setRemarks("");
     setQrBase64(null);
+    setSessionId(null);
     setPendingConfirmation(false);
     setQrPopupOpen(false);
     setStatusMsg("");
@@ -108,6 +141,18 @@ export default function TransactionsPage() {
       setStatusMsg("Recipient and amount are required.");
       return;
     }
+
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      setStatusMsg("Please enter a valid amount.");
+      return;
+    }
+    const amountCents = Math.round(parsedAmount * 100);
+    if (amountCents > totalBalance) {
+      setStatusMsg("Insufficient balance.");
+      return;
+    }
+
     if (!dispatchTargetId) {
       setStatusMsg("Dispatch target not loaded yet. Please try again.");
       return;
@@ -139,26 +184,17 @@ export default function TransactionsPage() {
         throw new Error("No QR code returned from server.");
       }
 
+      const txSessionId: string = qrData.sessionId;
+      const txTargetId: string = qrData.dispatchTargetId ?? dispatchTargetId;
+      setSessionId(txSessionId);
       setPendingConfirmation(true);
 
-      // 2. Also send push notification with the transaction message
-      if (session?.user?.sub) {
-        await fetch("/api/profile/pushnotification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: session.user.sub,
-            transaction: txMessage,
-            dispatchTargetId,
-          }),
-        });
-      }
-
-      // 3. Poll for approval
+      // 3. Poll /api/profile/pushconfirmation?username=X&targetId=Y for confirmed:true
+      const pollUsername = session?.user?.sub ?? "";
       let pollCount = 0;
       const pollInterval = setInterval(async () => {
         pollCount++;
-        if (pollCount > 30) {
+        if (pollCount > 60) {
           clearInterval(pollInterval);
           setStatusMsg("Confirmation timed out. Please try again.");
           setPendingConfirmation(false);
@@ -167,36 +203,58 @@ export default function TransactionsPage() {
         }
         try {
           const statusRes = await fetch(
-            `/api/profile/update/confirm-status?username=${session?.user?.sub}&targetId=${dispatchTargetId}`
+            `/api/profile/pushconfirmation?username=${encodeURIComponent(pollUsername)}&targetId=${encodeURIComponent(txTargetId)}`
           );
           const statusData = await statusRes.json();
-          if (statusData.status === "approved") {
+          console.log(`[poll #${pollCount}] pushconfirmation:`, statusData);
+
+          if (statusData.confirmed === true) {
             clearInterval(pollInterval);
             setQrPopupOpen(false);
             setPendingConfirmation(false);
             setSending(false);
             setStatusMsg("Transfer authorised! ✓");
-            // Refresh transfers
+
+            // Deduct the amount and persist to backend
+            const amountCents = Math.round(parseFloat(amount) * 100);
+            saveBalance((localBalanceCents ?? 0) - amountCents);
+
+            // Add a local transfer row immediately
+            const newTx: Transfer = {
+              transfer_id: `local-${Date.now()}`,
+              type: `Transfer to ${recipient}`,
+              transfer_date: new Date().toISOString(),
+              amount: -amountCents,
+              status: "completed",
+            };
+            setTransfers((prev) => [newTx, ...prev]);
+
+            // Try to refresh from API in background (best-effort)
             const userId = session?.user?.sub ?? sessionStorage.getItem("user_id");
             if (userId && apiUrl) {
-              const accs: Account[] = await fetch(`${apiUrl}/users/${userId}/accounts`)
+              fetch(`${apiUrl}/users/${userId}/accounts`)
                 .then((r) => r.json())
-                .catch(() => []);
-              const allTransfers = await Promise.all(
-                accs.map((acc) =>
-                  fetch(`${apiUrl}/users/${userId}/accounts/${acc.account_id}/transfers`)
-                    .then((r) => r.json())
-                    .catch(() => [])
-                )
-              );
-              const flat: Transfer[] = allTransfers.flat();
-              flat.sort(
-                (a, b) =>
-                  new Date(b.transfer_date).getTime() - new Date(a.transfer_date).getTime()
-              );
-              setAccounts(accs);
-              setTransfers(flat);
+                .then(async (accs: Account[]) => {
+                  const apiTotal = accs.reduce((s, a) => s + a.current_balance, 0);
+                  if (apiTotal > 0) saveBalance(apiTotal);
+                  setAccounts(accs);
+                  const allTransfers = await Promise.all(
+                    accs.map((acc) =>
+                      fetch(`${apiUrl}/users/${userId}/accounts/${acc.account_id}/transfers`)
+                        .then((r) => r.json())
+                        .catch(() => [])
+                    )
+                  );
+                  const flat: Transfer[] = allTransfers.flat();
+                  flat.sort(
+                    (a, b) =>
+                      new Date(b.transfer_date).getTime() - new Date(a.transfer_date).getTime()
+                  );
+                  setTransfers(flat);
+                })
+                .catch(() => {});
             }
+
             resetModal();
             setShowModal(false);
           }
@@ -213,6 +271,19 @@ export default function TransactionsPage() {
   return (
     <div className="max-w-[820px] mx-auto py-8 px-4">
 
+      {/* Back link */}
+      <button
+        onClick={() => router.push("/dashboard")}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          fontSize: 12, color: "#6B7280", background: "none", border: "none",
+          cursor: "pointer", marginBottom: "1.25rem", padding: 0,
+        }}
+      >
+        <ArrowLeft size={13} />
+        Dashboard
+      </button>
+
       {/* Balance card */}
       <div
         className="flex flex-col mb-6"
@@ -225,9 +296,25 @@ export default function TransactionsPage() {
         >
           {formatCents(totalBalance)}
         </span>
-        <span style={{ fontSize: 12, color: "#6B7280", marginTop: 4 }}>
-          Across {accounts.length} account{accounts.length !== 1 ? "s" : ""}
-        </span>
+        <div className="flex items-center justify-between" style={{ marginTop: 4 }}>
+          <span style={{ fontSize: 12, color: "#6B7280" }}>
+            Across {accounts.length} account{accounts.length !== 1 ? "s" : ""}
+          </span>
+          <button
+            onClick={() => saveBalance((localBalanceCents ?? 0) + 100_000)}
+            className="flex items-center gap-1 hover:opacity-80 transition-opacity"
+            style={{
+              backgroundColor: "#1E2D40",
+              border: "1px solid #334155",
+              height: 28,
+              padding: "0 12px",
+              fontSize: 12,
+              color: "#93C5FD",
+            }}
+          >
+            + Top up $1,000
+          </button>
+        </div>
       </div>
 
       {/* Main card */}
@@ -375,7 +462,7 @@ export default function TransactionsPage() {
                   style={{
                     height: 42,
                     padding: "0 14px",
-                    border: "1px solid #D1D5DB",
+                    border: `1px solid ${amount && parseFloat(amount) * 100 > totalBalance ? "#E53935" : "#D1D5DB"}`,
                     opacity: pendingConfirmation ? 0.6 : 1,
                   }}
                 >
@@ -386,17 +473,27 @@ export default function TransactionsPage() {
                     $
                   </span>
                   <input
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="0.00"
                     value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
+                    onChange={(e) => {
+                      // Allow digits with optional single decimal point and up to 2 decimal places
+                      const val = e.target.value;
+                      if (val === "" || /^\d+(\.\d{0,2})?$/.test(val)) {
+                        setAmount(val);
+                      }
+                    }}
                     disabled={pendingConfirmation}
                     className="flex-1 bg-white outline-none font-mono-jetbrains"
                     style={{ fontSize: 13, color: "#111827" }}
                   />
                 </div>
+                {amount && parseFloat(amount) * 100 > totalBalance && (
+                  <span style={{ fontSize: 11, color: "#E53935" }}>
+                    Exceeds available balance ({formatCents(totalBalance)})
+                  </span>
+                )}
               </div>
 
               {/* Remarks */}
@@ -449,7 +546,7 @@ export default function TransactionsPage() {
               </button>
               <button
                 onClick={handleSend}
-                disabled={sending || pendingConfirmation}
+                disabled={sending || pendingConfirmation || !!(amount && parseFloat(amount) * 100 > totalBalance)}
                 className="flex items-center justify-center hover:opacity-80 transition-opacity"
                 style={{
                   backgroundColor: "#0B1220",
@@ -457,7 +554,7 @@ export default function TransactionsPage() {
                   padding: "0 24px",
                   fontSize: 13,
                   color: "#FFFFFF",
-                  opacity: sending || pendingConfirmation ? 0.6 : 1,
+                  opacity: sending || pendingConfirmation || !!(amount && parseFloat(amount) * 100 > totalBalance) ? 0.6 : 1,
                 }}
               >
                 {sending ? "Awaiting confirmation…" : "Send"}

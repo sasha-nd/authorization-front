@@ -1,241 +1,339 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { QRCode } from "qrcode.react";
 import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
+import { ShieldCheck, Clock, X, ArrowRight, CreditCard, User } from "lucide-react";
+
+const GRANT_TTL = 60; // seconds
 
 export default function DashboardPage() {
   const { data: session } = useSession();
-  const [dispatchTargetId, setDispatchTargetId] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [qrBase64, setQrBase64] = useState<string | null>(null);
-  const [otpauthUri, setOtpauthUri] = useState<string | null>(null);
-  const [qrPopupOpen, setQrPopupOpen] = useState(false);
-  const [pendingConfirmation, setPendingConfirmation] = useState(false);
-  interface ProfileType {
-    name: string;
-    given_name: string;
-    family_name: string;
-    email: string;
-    phone: string;
-    address: string;
+  const router = useRouter();
+
+  // --- Support Access Grant state ---
+  const [grantActive, setGrantActive] = useState(false);
+  const [grantRemaining, setGrantRemaining] = useState(0); // seconds
+  const [grantLoading, setGrantLoading] = useState(false);
+  const [grantMsg, setGrantMsg] = useState("");
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Sync grant state on mount (handles page refresh)
+  useEffect(() => {
+    fetch("/api/profile/grant-access")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.active && d.remainingMs > 0) {
+          startCountdown(Math.ceil(d.remainingMs / 1000));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  function clearCountdown() {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
   }
 
-  const [profileData, setProfileData] = useState<ProfileType>({
-    name: session?.user?.name || "",
-    given_name: session?.user?.given_name || "",
-    family_name: session?.user?.family_name || "",
-    email: session?.user?.email || "",
-    phone: (session?.user as any)?.phone_number || (session?.user as any)?.phone || "",
-    address: (session?.user as any)?.address || "",
-  });
-  const [editData, setEditData] = useState<ProfileType>(profileData);
-
-  useEffect(() => {
-    if (!session?.user?.sub) return;
-    const fetchDispatchTarget = async () => {
-      try {
-        const res = await fetch(`/api/dispatch/target?username=${session.user.sub}`);
-        const data = await res.json();
-        setDispatchTargetId(data.dispatchTargets?.[0]?.id || null);
-      } catch (err) {
-        console.error("Failed to fetch dispatch target:", err);
-      }
-    };
-    fetchDispatchTarget();
-  }, [session?.user?.sub]);
-
-  const handleEdit = () => {
-    setEditData(profileData);
-    setPendingConfirmation(false);
-  };
-
-  const handleFieldChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setEditData({ ...editData, [e.target.name]: e.target.value });
-  };
-
-  const handleGenerateQR = async () => {
-    if (!dispatchTargetId) {
-      alert("Dispatch target not loaded yet. Try again.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await fetch("/api/dispatch-qr-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: session?.user?.sub,
-          attributeName: `Authentication for ${session?.user?.sub}`,
-        }),
+  function startCountdown(seconds: number) {
+    clearCountdown();
+    setGrantActive(true);
+    setGrantRemaining(seconds);
+    countdownRef.current = setInterval(() => {
+      setGrantRemaining((prev) => {
+        if (prev <= 1) {
+          clearCountdown();
+          setGrantActive(false);
+          setGrantMsg("Support access has expired.");
+          return 0;
+        }
+        return prev - 1;
       });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      if (data.otpauth) {
-        setOtpauthUri(data.otpauth);
-        setQrBase64(null);
-      } else if (data.dispatcherInformation?.response) {
-        setQrBase64(data.dispatcherInformation.response);
-        setOtpauthUri(null);
-      } else {
-        setQrBase64(null);
-        setOtpauthUri(null);
-      }
-      setQrPopupOpen(true);
-      setPendingConfirmation(true);
+    }, 1000);
+  }
 
-      // Start polling for confirmation status
-      let pollCount = 0;
-      const pollInterval = setInterval(async () => {
-        pollCount++;
-        if (pollCount > 20) {
-          clearInterval(pollInterval);
-          return;
-        }
-        try {
-          const res = await fetch(`/api/profile/update/confirm-status?username=${session?.user?.sub}&targetId=${dispatchTargetId}`);
-          const data = await res.json();
-          if (data.status === "approved") {
-            clearInterval(pollInterval);
-            // Now call the profile update API once
-            try {
-              const updateRes = await fetch("/api/profile/update/save", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ sub: session?.user?.sub, dispatchTargetId, ...editData }),
-              });
-              const updateData = await updateRes.json();
-              if (updateData.success) {
-                setProfileData(editData);
-                setPendingConfirmation(false);
-                setQrPopupOpen(false);
-                alert("Profile changes saved.");
-              }
-            } catch (err) {
-              // Ignore errors during update
-            }
-          }
-        } catch (err) {
-          // Ignore errors during polling
-        }
-      }, 2000);
-    } catch (err) {
-      console.error("Failed to generate QR:", err);
-      alert("Failed to generate QR: " + (err as any).message);
+  // Cleanup on unmount
+  useEffect(() => () => clearCountdown(), []);
+
+  async function handleGrantAccess() {
+    setGrantLoading(true);
+    setGrantMsg("");
+    try {
+      const res = await fetch("/api/profile/grant-access", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to grant access");
+      startCountdown(GRANT_TTL);
+    } catch (e: any) {
+      setGrantMsg("Error: " + e.message);
     } finally {
-      setSaving(false);
+      setGrantLoading(false);
     }
-  };
+  }
 
-  const handleConfirm = async () => {
+  async function handleExtendAccess() {
+    setGrantLoading(true);
+    setGrantMsg("");
     try {
-      const res = await fetch("/api/profile/update/save", {
+      const res = await fetch("/api/profile/grant-access", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sub: session?.user?.sub,
-          dispatchTargetId,
-          ...editData,
-        }),
+        body: JSON.stringify({ extend: true }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Unknown error");
-      setProfileData(editData);
-      setPendingConfirmation(false);
-      setQrPopupOpen(false);
-      alert("Profile changes saved.");
-    } catch (err: any) {
-      alert("Failed to save profile: " + err.message);
+      if (!res.ok) throw new Error(data.error ?? "Failed to extend access");
+      // Use the authoritative remaining time returned by the server
+      const remainingMs = data.ttlMs ?? GRANT_TTL * 1000;
+      startCountdown(Math.ceil(remainingMs / 1000));
+    } catch (e: any) {
+      setGrantMsg("Error: " + e.message);
+    } finally {
+      setGrantLoading(false);
     }
-  };
+  }
 
-  const handleCancel = () => {
-    setEditData(profileData);
-    setPendingConfirmation(false);
-    setQrPopupOpen(false);
-    alert("Profile changes discarded.");
-  };
+  async function handleRevokeAccess() {
+    clearCountdown();
+    setGrantActive(false);
+    setGrantRemaining(0);
+    setGrantMsg("Support access revoked.");
+    await fetch("/api/profile/grant-access", { method: "DELETE" }).catch(() => {});
+  }
+
+  const username =
+    session?.user?.name ||
+    `${session?.user?.given_name ?? ""} ${session?.user?.family_name ?? ""}`.trim() ||
+    session?.user?.sub ||
+    "User";
+
+  // countdown ring geometry
+  const RADIUS = 22;
+  const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+  const strokeDash = CIRCUMFERENCE * (grantRemaining / GRANT_TTL);
 
   return (
-    <div style={{ padding: "1.5rem", maxWidth: "600px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-      <pre style={{ background: '#f6f8fa', padding: '1rem', borderRadius: '6px', fontSize: '0.9rem', color: '#333' }}>
-        <strong>Session User Debug:</strong> {JSON.stringify(session?.user, null, 2)}
-      </pre>
-      <h1 style={{ fontSize: "1.5rem", fontWeight: "bold" }}>Profile</h1>
-      <div>User ID: {session?.user?.sub}</div>
-      <div>Dispatch Target ID: {dispatchTargetId ?? "Not found"}</div>
+    <div className="min-h-screen" style={{ background: "#F3F4F6", padding: "2rem 1rem" }}>
+      <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
 
-      <form style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-        <label>
-          Name:
-          <input type="text" name="name" value={editData.name} onChange={handleFieldChange} disabled={pendingConfirmation} />
-        </label>
-        <label>
-          Given Name:
-          <input type="text" name="given_name" value={editData.given_name} onChange={handleFieldChange} disabled={pendingConfirmation} />
-        </label>
-        <label>
-          Family Name:
-          <input type="text" name="family_name" value={editData.family_name} onChange={handleFieldChange} disabled={pendingConfirmation} />
-        </label>
-        <label>
-          Email:
-          <input type="email" name="email" value={editData.email} onChange={handleFieldChange} disabled={pendingConfirmation} />
-        </label>
-        <label>
-          Phone:
-          <input type="text" name="phone" value={editData.phone} onChange={handleFieldChange} disabled={pendingConfirmation} />
-        </label>
-        <label>
-          Address:
-          <input type="text" name="address" value={editData.address} onChange={handleFieldChange} disabled={pendingConfirmation} />
-        </label>
-        <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
-          <button type="button" onClick={handleEdit} style={{ padding: "0.5rem 1rem", backgroundColor: "#38a169", color: "#fff", borderRadius: "4px" }} disabled={pendingConfirmation}>Edit</button>
-          <button type="button" onClick={handleGenerateQR} style={{ padding: "0.5rem 1rem", backgroundColor: "#3182ce", color: "#fff", borderRadius: "4px" }} disabled={saving || pendingConfirmation}>{saving ? "Generating..." : "Save & Confirm via QR"}</button>
-        </div>
-      </form>
-
-      {/* QR Code Popup */}
-      {qrPopupOpen && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: "rgba(0,0,0,0.6)",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            zIndex: 9999,
-          }}
-          onClick={() => setQrPopupOpen(false)}
-        >
-          <div
-            style={{ backgroundColor: "#fff", padding: "1.5rem", borderRadius: "8px" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2>Scan this QR</h2>
-            {otpauthUri ? (
-              <QRCode value={otpauthUri} size={250} />
-            ) : qrBase64 ? (
-              <img src={`data:image/png;base64,${qrBase64}`} alt="QR Code" style={{ maxWidth: "250px", maxHeight: "250px" }} />
-            ) : (
-              <div style={{ color: 'red' }}>No QR code available</div>
-            )}
-            {pendingConfirmation && (
-              <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
-                <button onClick={handleConfirm} style={{ padding: '0.5rem 1rem', backgroundColor: '#38a169', color: '#fff', borderRadius: '4px' }}>Confirm</button>
-                <button onClick={handleCancel} style={{ padding: '0.5rem 1rem', backgroundColor: '#a0aec0', color: '#fff', borderRadius: '4px' }}>Cancel</button>
-              </div>
-            )}
-            {otpauthUri && (
-              <div style={{ marginTop: '1rem', wordBreak: 'break-all', fontSize: '0.9rem', color: '#555' }}>
-                <strong>otpauth URI:</strong> {otpauthUri}
-              </div>
+        {/* Welcome banner */}
+        <div style={{
+          background: "#0B1220",
+          borderRadius: 12,
+          padding: "1.5rem 2rem",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}>
+          <div>
+            <p style={{ fontSize: 13, color: "#9CA3AF", marginBottom: 4 }}>Welcome back</p>
+            <h1 style={{ fontSize: "1.5rem", fontWeight: 700 }}>{username}</h1>
+            {session?.user?.sub && (
+              <p style={{ fontSize: 11, color: "#6B7280", marginTop: 4, fontFamily: "monospace" }}>
+                {session.user.sub}
+              </p>
             )}
           </div>
+          <div style={{
+            background: "#1F2A40",
+            borderRadius: 8,
+            padding: "0.5rem 1rem",
+            fontSize: 12,
+            color: "#9CA3AF",
+          }}>
+            National Digital Bank
+          </div>
         </div>
-      )}
+
+        {/* Quick-action cards */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+          <button
+            onClick={() => router.push("/dashboard/transactions")}
+            style={{
+              background: "#fff",
+              border: "1px solid #E5E7EB",
+              borderRadius: 12,
+              padding: "1.25rem",
+              textAlign: "left",
+              cursor: "pointer",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <CreditCard size={22} color="#E53935" />
+            <span style={{ fontWeight: 600, fontSize: 14, color: "#111827" }}>Transactions</span>
+            <span style={{ fontSize: 12, color: "#6B7280" }}>View balance &amp; send money</span>
+            <ArrowRight size={14} color="#9CA3AF" />
+          </button>
+
+          <button
+            onClick={() => router.push("/dashboard/profile")}
+            style={{
+              background: "#fff",
+              border: "1px solid #E5E7EB",
+              borderRadius: 12,
+              padding: "1.25rem",
+              textAlign: "left",
+              cursor: "pointer",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <User size={22} color="#3B82F6" />
+            <span style={{ fontWeight: 600, fontSize: 14, color: "#111827" }}>Profile</span>
+            <span style={{ fontSize: 12, color: "#6B7280" }}>Manage your account info</span>
+            <ArrowRight size={14} color="#9CA3AF" />
+          </button>
+        </div>
+
+        {/* ─── Support Access Grant card ─── */}
+        <div style={{
+          background: "#fff",
+          border: `2px solid ${grantActive ? "#16A34A" : "#E5E7EB"}`,
+          borderRadius: 12,
+          padding: "1.5rem",
+          transition: "border-color .3s",
+        }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "1rem" }}>
+
+            {/* Countdown ring or shield icon */}
+            <div style={{ flexShrink: 0, position: "relative", width: 54, height: 54 }}>
+              {grantActive ? (
+                <>
+                  <svg width={54} height={54} style={{ transform: "rotate(-90deg)" }}>
+                    <circle cx={27} cy={27} r={RADIUS} fill="none" stroke="#E5E7EB" strokeWidth={4} />
+                    <circle
+                      cx={27} cy={27} r={RADIUS}
+                      fill="none"
+                      stroke={grantRemaining > 15 ? "#16A34A" : "#DC2626"}
+                      strokeWidth={4}
+                      strokeDasharray={`${strokeDash} ${CIRCUMFERENCE}`}
+                      strokeLinecap="round"
+                      style={{ transition: "stroke-dasharray .9s linear, stroke .3s" }}
+                    />
+                  </svg>
+                  <span style={{
+                    position: "absolute", inset: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontWeight: 700,
+                    fontSize: 13,
+                    color: grantRemaining > 15 ? "#16A34A" : "#DC2626",
+                  }}>
+                    {grantRemaining}s
+                  </span>
+                </>
+              ) : (
+                <div style={{
+                  width: 54, height: 54, borderRadius: "50%",
+                  background: "#F3F4F6",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <ShieldCheck size={26} color="#6B7280" />
+                </div>
+              )}
+            </div>
+
+            {/* Text + buttons */}
+            <div style={{ flex: 1 }}>
+              <h3 style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 4 }}>
+                Support Access
+              </h3>
+
+              {grantActive ? (
+                <p style={{ fontSize: 13, color: "#16A34A", marginBottom: 12 }}>
+                  ✓ A support agent can edit your profile and transactions.
+                  Window closes in <strong>{grantRemaining}s</strong>.
+                  Any action they start after the window closes will be blocked.
+                </p>
+              ) : (
+                <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 12 }}>
+                  Temporarily allow a support agent to edit your profile and
+                  initiate transfers on your behalf. The permission expires
+                  automatically after <strong>60 seconds</strong>. Any action
+                  already in progress when the window expires will also be blocked.
+                </p>
+              )}
+
+              {grantMsg && (
+                <p style={{
+                  fontSize: 12, marginBottom: 10,
+                  color: grantMsg.startsWith("Error") ? "#DC2626" : "#6B7280",
+                }}>
+                  {grantMsg}
+                </p>
+              )}
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {!grantActive ? (
+                  <button
+                    onClick={handleGrantAccess}
+                    disabled={grantLoading}
+                    style={{
+                      background: "#0B1220",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "0.55rem 1.25rem",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: grantLoading ? "not-allowed" : "pointer",
+                      opacity: grantLoading ? 0.6 : 1,
+                      display: "flex", alignItems: "center", gap: 6,
+                    }}
+                  >
+                    <ShieldCheck size={15} />
+                    {grantLoading ? "Granting…" : "Grant Support Access"}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleExtendAccess}
+                      disabled={grantLoading}
+                      style={{
+                        background: "#166534",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: 8,
+                        padding: "0.55rem 1.25rem",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: 6,
+                      }}
+                    >
+                      <Clock size={14} />
+                      Extend +60s
+                    </button>
+                    <button
+                      onClick={handleRevokeAccess}
+                      style={{
+                        background: "#FEF2F2",
+                        color: "#DC2626",
+                        border: "1px solid #FECACA",
+                        borderRadius: 8,
+                        padding: "0.55rem 1.25rem",
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: 6,
+                      }}
+                    >
+                      <X size={14} />
+                      Revoke
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
     </div>
   );
 }

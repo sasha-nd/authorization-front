@@ -2,15 +2,20 @@
 
 import React, { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { User, Pencil, X, CheckCircle, ArrowLeft } from "lucide-react";
 
 export default function ProfilePage() {
+  const { data: session } = useSession();
+  const router = useRouter();
+
   const [dispatchTargetId, setDispatchTargetId] = useState<string | null>(null);
   const [qrBase64, setQrBase64] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
   const [qrPopupOpen, setQrPopupOpen] = useState(false);
 
-  const { data: session } = useSession();
   const [formData, setFormData] = useState({
     name: session?.user?.name || "",
     given_name: session?.user?.given_name || "",
@@ -20,23 +25,26 @@ export default function ProfilePage() {
     sub: session?.user?.sub || "",
   });
 
+  // Keep form in sync when session loads
+  useEffect(() => {
+    if (session?.user) {
+      setFormData({
+        name: session.user.name || "",
+        given_name: session.user.given_name || "",
+        family_name: session.user.family_name || "",
+        email: session.user.email || "",
+        phone: (session.user as any)?.phone_number || "",
+        sub: session.user.sub || "",
+      });
+    }
+  }, [session?.user?.sub]);
+
   useEffect(() => {
     if (!session?.user?.sub) return;
-
-    const fetchDispatchTarget = async () => {
-      try {
-        const res = await fetch(`/api/dispatch/target?username=${session.user.sub}`);
-        if (!res.ok) throw Error(`HTTP error! status: ${res.status}`);
-        const data = await res.json();
-        const targetId = data.dispatchTargets?.[0]?.id || null;
-        setDispatchTargetId(targetId);
-      } catch (err) {
-        console.error("Failed to fetch dispatch target:", err);
-        setDispatchTargetId(null);
-      }
-    };
-
-    fetchDispatchTarget();
+    fetch(`/api/dispatch/target?username=${session.user.sub}`)
+      .then((r) => r.json())
+      .then((d) => setDispatchTargetId(d.dispatchTargets?.[0]?.id ?? null))
+      .catch(() => {});
   }, [session?.user?.sub]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -46,6 +54,7 @@ export default function ProfilePage() {
 
   const handleCancel = () => {
     setEditing(false);
+    setSaveMsg("");
     setFormData({
       name: session?.user?.name || "",
       given_name: session?.user?.given_name || "",
@@ -58,14 +67,12 @@ export default function ProfilePage() {
 
   const handleSave = async () => {
     if (!dispatchTargetId) {
-      alert("Dispatch target not loaded yet.");
+      setSaveMsg("Dispatch target not loaded yet. Please try again.");
       return;
     }
-
     setSaving(true);
-
+    setSaveMsg("");
     try {
-      // 1. Generate QR code and wait for confirmation
       const qrRes = await fetch("/api/dispatch-qr-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -83,8 +90,6 @@ export default function ProfilePage() {
         throw new Error("No QR payload returned from server");
       }
 
-      // 2. Send profile update to NevisIDM after QR confirmation
-      // (simulate confirmation for now, or add polling if needed)
       const updateRes = await fetch("/api/profile/update/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -99,129 +104,273 @@ export default function ProfilePage() {
         }),
       });
       const updateData = await updateRes.json();
-      if (!updateRes.ok) {
-        throw new Error(updateData.error || "Profile update failed");
-      }
-      // Show NevisIDM PATCH response for debugging
-      alert("NevisIDM PATCH response: " + JSON.stringify(updateData.patchResponse));
-    } catch (err) {
-      console.error("Failed to save profile:", err);
-      alert("Failed to save profile: " + (err as any).message);
+      if (!updateRes.ok) throw new Error(updateData.error || "Profile update failed");
+      setEditing(false);
+      setSaveMsg("Profile updated successfully ✓");
+    } catch (err: any) {
+      setSaveMsg("Failed to save: " + err.message);
     } finally {
       setSaving(false);
     }
   };
 
-  return (
-    <div style={{ padding: "1.5rem", maxWidth: "600px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-      <h1 style={{ fontSize: "1.5rem", fontWeight: "bold" }}>Profile</h1>
-      <div>User ID: {session?.user?.sub}</div>
-      <div>Dispatch Target ID: {dispatchTargetId ?? "Not found"}</div>
+  const username =
+    session?.user?.name ||
+    `${session?.user?.given_name ?? ""} ${session?.user?.family_name ?? ""}`.trim() ||
+    session?.user?.sub ||
+    "User";
 
-      <form style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-        <label>
-          Name:
-          <input
-            type="text"
-            name="name"
-            value={formData.name}
-            onChange={handleChange}
-            disabled={!editing}
-            style={{ marginLeft: "0.5rem", backgroundColor: editing ? '#e6f7ff' : '#f7fafc' }}
-          />
-        </label>
-        <label>
-          Given Name:
-          <input
-            type="text"
-            name="given_name"
-            value={formData.given_name}
-            onChange={handleChange}
-            disabled={!editing}
-            style={{ marginLeft: "0.5rem", backgroundColor: editing ? '#e6f7ff' : '#f7fafc' }}
-          />
-        </label>
-        <label>
-          Family Name:
-          <input
-            type="text"
-            name="family_name"
-            value={formData.family_name}
-            onChange={handleChange}
-            disabled={!editing}
-            style={{ marginLeft: "0.5rem", backgroundColor: editing ? '#e6f7ff' : '#f7fafc' }}
-          />
-        </label>
-        <label>
-          Email:
-          <input
-            type="email"
-            name="email"
-            value={formData.email}
-            onChange={handleChange}
-            disabled={!editing}
-            style={{ marginLeft: "0.5rem", backgroundColor: editing ? '#e6f7ff' : '#f7fafc' }}
-          />
-        </label>
-        <label>
-          Phone:
-          <input
-            type="text"
-            name="phone"
-            value={formData.phone}
-            onChange={handleChange}
-            disabled={!editing}
-            style={{ marginLeft: "0.5rem", backgroundColor: editing ? '#e6f7ff' : '#f7fafc' }}
-          />
-        </label>
-        <div style={{ display: "flex", gap: "1rem", marginTop: "1rem" }}>
-          {!editing ? (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              style={{ padding: "0.5rem 1rem", backgroundColor: "#38a169", color: "#fff", borderRadius: "4px" }}
-            >
-              Edit
-            </button>
-          ) : (
-            <>
+  const fields: { label: string; name: keyof typeof formData; type?: string }[] = [
+    { label: "Display Name", name: "name" },
+    { label: "Given Name", name: "given_name" },
+    { label: "Family Name", name: "family_name" },
+    { label: "Email", name: "email", type: "email" },
+    { label: "Phone", name: "phone", type: "tel" },
+  ];
+
+  return (
+    <div style={{ background: "#F3F4F6", minHeight: "100vh", padding: "2rem 1rem" }}>
+      <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+
+        {/* ── Header banner ── */}
+        <div style={{
+          background: "#0B1220",
+          borderRadius: 12,
+          padding: "1.5rem 2rem",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+            <div style={{
+              width: 44, height: 44, borderRadius: "50%",
+              background: "#1F2A40",
+              display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            }}>
+              <User size={22} color="#9CA3AF" />
+            </div>
+            <div>
+              <p style={{ fontSize: 13, color: "#9CA3AF", marginBottom: 2 }}>Account Profile</p>
+              <h1 style={{ fontSize: "1.25rem", fontWeight: 700 }}>{username}</h1>
+              {session?.user?.sub && (
+                <p style={{ fontSize: 11, color: "#6B7280", marginTop: 2, fontFamily: "monospace" }}>
+                  {session.user.sub}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => router.push("/dashboard")}
+            style={{
+              background: "#1F2A40",
+              border: "none",
+              borderRadius: 8,
+              padding: "0.5rem 1rem",
+              fontSize: 12,
+              color: "#9CA3AF",
+              cursor: "pointer",
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+          >
+            <ArrowLeft size={13} />
+            Dashboard
+          </button>
+        </div>
+
+        {/* ── Profile fields card ── */}
+        <div style={{
+          background: "#fff",
+          border: "1px solid #E5E7EB",
+          borderRadius: 12,
+          padding: "1.5rem",
+        }}>
+          {/* Card header */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            marginBottom: "1.5rem",
+          }}>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}>Personal Information</h2>
+              <p style={{ fontSize: 12, color: "#6B7280", marginTop: 2 }}>
+                {editing ? "Make your changes and save below." : "Your account details as stored in the system."}
+              </p>
+            </div>
+            {!editing && (
               <button
-                type="button"
-                onClick={handleSave}
-                style={{ padding: "0.5rem 1rem", backgroundColor: "#3182ce", color: "#fff", borderRadius: "4px" }}
-                disabled={saving}
+                onClick={() => { setEditing(true); setSaveMsg(""); }}
+                style={{
+                  background: "#0B1220",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "0.5rem 1.1rem",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}
               >
-                {saving ? "Saving..." : "Save & Generate QR"}
+                <Pencil size={13} />
+                Edit
+              </button>
+            )}
+          </div>
+
+          {/* Fields */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            {fields.map(({ label, name, type }) => (
+              <div key={name} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>{label}</label>
+                <input
+                  type={type ?? "text"}
+                  name={name}
+                  value={formData[name]}
+                  onChange={handleChange}
+                  disabled={!editing}
+                  style={{
+                    height: 42,
+                    padding: "0 14px",
+                    border: `1px solid ${editing ? "#93C5FD" : "#E5E7EB"}`,
+                    borderRadius: 8,
+                    fontSize: 13,
+                    color: "#111827",
+                    background: editing ? "#F0F9FF" : "#F9FAFB",
+                    outline: "none",
+                    transition: "border-color .2s, background .2s",
+                  }}
+                />
+              </div>
+            ))}
+
+            {/* Read-only sub */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>User ID (sub)</label>
+              <input
+                type="text"
+                value={formData.sub}
+                disabled
+                style={{
+                  height: 42,
+                  padding: "0 14px",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  fontSize: 12,
+                  color: "#9CA3AF",
+                  background: "#F9FAFB",
+                  fontFamily: "monospace",
+                  outline: "none",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Status message */}
+          {saveMsg && (
+            <p style={{
+              marginTop: "1rem",
+              fontSize: 13,
+              color: saveMsg.includes("✓") ? "#047857" : "#B91C1C",
+              display: "flex", alignItems: "center", gap: 5,
+            }}>
+              {saveMsg.includes("✓") && <CheckCircle size={14} />}
+              {saveMsg}
+            </p>
+          )}
+
+          {/* Action buttons */}
+          {editing && (
+            <div style={{ display: "flex", gap: 10, marginTop: "1.5rem" }}>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                style={{
+                  background: "#0B1220",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "0.55rem 1.4rem",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: saving ? "not-allowed" : "pointer",
+                  opacity: saving ? 0.6 : 1,
+                }}
+              >
+                {saving ? "Saving…" : "Save & Confirm"}
               </button>
               <button
-                type="button"
                 onClick={handleCancel}
-                style={{ padding: "0.5rem 1rem", backgroundColor: "#a0aec0", color: "#fff", borderRadius: "4px" }}
+                style={{
+                  background: "#F9FAFB",
+                  color: "#374151",
+                  border: "1px solid #E5E7EB",
+                  borderRadius: 8,
+                  padding: "0.55rem 1.2rem",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 5,
+                }}
               >
+                <X size={13} />
                 Cancel
               </button>
-            </>
+            </div>
           )}
         </div>
-      </form>
 
-      {/* QR Code Popup */}
+      </div>
+
+      {/* ── QR Popup ── */}
       {qrPopupOpen && qrBase64 && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white p-8 rounded shadow-lg relative flex flex-col items-center">
+        <div
+          style={{
+            position: "fixed", inset: 0,
+            background: "rgba(0,0,0,0.55)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 100,
+          }}
+        >
+          <div style={{
+            background: "#fff",
+            borderRadius: 12,
+            padding: "2rem",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 16,
+            border: "1px solid #E5E7EB",
+            maxWidth: 340,
+            width: "100%",
+            position: "relative",
+          }}>
             <button
-              className="absolute top-2 right-2 text-gray-500 hover:text-gray-700"
               onClick={() => setQrPopupOpen(false)}
+              style={{
+                position: "absolute", top: 14, right: 14,
+                background: "none", border: "none", cursor: "pointer", color: "#9CA3AF",
+              }}
             >
-              &times;
+              <X size={18} />
             </button>
-            <h2>Scan this QR</h2>
-            <img src={`data:image/png;base64,${qrBase64}`} alt="QR Code" style={{ width: 250, height: 250 }} />
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: "#0B1220" }}>Scan to Confirm</h2>
+            <p style={{ fontSize: 13, color: "#6B7280", textAlign: "center" }}>
+              Open your authenticator app and scan the QR code to authorise this profile update.
+            </p>
+            <img
+              src={`data:image/png;base64,${qrBase64}`}
+              alt="QR Code"
+              style={{ width: 220, height: 220 }}
+            />
+            <span style={{ fontSize: 12, color: "#9CA3AF" }}>Waiting for confirmation…</span>
             <button
-              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
               onClick={() => setQrPopupOpen(false)}
+              style={{
+                fontSize: 13, color: "#6B7280",
+                textDecoration: "underline",
+                background: "none", border: "none", cursor: "pointer",
+              }}
             >
-              Close
+              Cancel
             </button>
           </div>
         </div>

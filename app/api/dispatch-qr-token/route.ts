@@ -68,6 +68,7 @@ export async function POST(request: Request) {
       }
     );
     const tokenData = await tokenRes.json();
+    console.log("[dispatch-qr-token] Nevis QR response:", JSON.stringify(tokenData, null, 2));
     if (!tokenRes.ok || !tokenData.dispatcherInformation || !tokenData.dispatcherInformation.response) {
       return NextResponse.json({ error: "Failed to get QR from Nevis", details: tokenData }, { status: 500 });
     }
@@ -114,6 +115,7 @@ export async function POST(request: Request) {
         response: tokenData.dispatcherInformation.response
       },
       sessionId: tokenData.token,
+      dispatchTargetId,
       payload: payload,
     });
   } catch (err) {

@@ -7,10 +7,7 @@ interface LogoutButtonProps {
 }
 
 export async function handleLogout() {
-  await signOut({ redirect: false });
-  const nevisLogoutUrl = process.env.NEXT_PUBLIC_NEVIS_LOGOUT_URL ?? "https://login.national-digital.getnevis.net/?logout";
-  const returnUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  window.location.href = `${nevisLogoutUrl}&redirectUrl=${encodeURIComponent(returnUrl)}`;
+  await signOut({ callbackUrl: "/", redirect: true });
 }
 
 export default function LogoutButton({ className }: LogoutButtonProps) {

@@ -18,7 +18,8 @@ export async function POST(req: Request) {
     // Body required by Nevis docs
     const bodyPayload = {
       dispatchTargetId,
-      dispatchInformation: { notification: { title: transaction || "Auth Request" } },
+      dispatcher: "firebase-cloud-messaging",
+      dispatchInformation: { notification: { title: transaction || "Auth Request" }, data: {} },
       getUafRequest: {
         op: "Auth",
         context: JSON.stringify({ username, transaction }),
@@ -45,13 +46,16 @@ export async function POST(req: Request) {
 
     const data = JSON.parse(text);
 
-    // Check if Nevis returned sessionId or token
-    if (!data.sessionId && !data.token) {
+    // Nevis push dispatch returns { dispatchResult: "dispatched" } on success
+    if (data.dispatchResult && data.dispatchResult !== "dispatched") {
       throw new Error(`Push dispatch failed: ${text}`);
+    }
+    if (!res.ok) {
+      throw new Error(`Push dispatch failed (HTTP ${res.status}): ${text}`);
     }
 
     // Return sessionId or token to frontend to poll status
-    return NextResponse.json({ pushId: data.sessionId ?? data.token });
+    return NextResponse.json({ pushId: data.sessionId ?? data.token ?? data.dispatchResult });
   } catch (err: any) {
     console.error("Push dispatch error:", err);
     return NextResponse.json({ error: err.message }, { status: 500 });

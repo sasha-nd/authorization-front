@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root {
+  --color-accent: #E53935;
+  --color-muted: #777777;
+  --color-border: #E4E4E4;
+}
+
+@layer base {
+  html, body {
+    height: 100%;
+  }
+
+  .font-inter {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  }
+
+  .font-mono-jetbrains {
+    font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  }
+}

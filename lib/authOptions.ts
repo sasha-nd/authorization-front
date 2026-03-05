@@ -41,7 +41,7 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.NEVIS_CLIENT_SECRET!,
       authorization: {
         params: {
-          scope: "openid profile email phone address",
+          scope: "openid profile email phone address roles",
           claims: {
             id_token: {
               given_name: null,
@@ -50,6 +50,11 @@ export const authOptions: NextAuthOptions = {
               sub: null,
               phone_number: null,
               address: null,
+              secrole: null,
+              role: null,
+              roles: null,
+              "ch.adnovum.nevis.roles": null,
+              "urn:nevis:roles": null,
             },
           },
         },
@@ -82,6 +87,11 @@ export const authOptions: NextAuthOptions = {
       if (account) {
         token.accessToken = account.access_token;
         token.idToken = account.id_token;
+        
+        console.log("[authOptions] ========== TOKEN DUMP ==========");
+        console.log("[authOptions] Access Token:", account.access_token);
+        console.log("[authOptions] ID Token:", account.id_token);
+        console.log("[authOptions] ===================================");
 
         // Extract scopes/roles from the access token or id token payload.
         // Nevis puts granted scopes in the access_token and may put roles
@@ -94,15 +104,53 @@ export const authOptions: NextAuthOptions = {
 
           if (account.access_token) {
             decodedAccess = jwtDecode(account.access_token);
+            console.log("[authOptions] decoded Access token:", JSON.stringify(decodedAccess, null, 2));
           }
           if (account.id_token) {
             decodedId = jwtDecode(account.id_token);
+            console.log("[authOptions] decoded ID token:", JSON.stringify(decodedId, null, 2));
           }
 
           // Primary source: account.scope (the granted scopes from the token response).
           // Nevis lists "support" here for users that have the support role.
-          // Fall back to the scope claim inside the access_token.
+          // Fall back to the scope claim inside the access_token or ID token.
           const combined = { ...decodedId, ...decodedAccess };
+          
+          // Extract roles from nevisAuth session variable: ${sess:ch.nevis.session.secroles}
+          // This is configured in the Authorization Server to include user roles in tokens.
+          // The secroles claim contains a comma-separated list like: "Main,nevisIdm.SelfAdmin,support.support"
+          const nevisRoles = combined["urn:nevis:roles"] ?? decodedId["urn:nevis:roles"] ?? [];
+          const secrolesRaw = combined["secroles"] ?? decodedAccess["secroles"] ?? "";
+          
+          console.log("[authOptions] urn:nevis:roles claim:", nevisRoles);
+          console.log("[authOptions] secroles claim:", secrolesRaw);
+          
+          // Parse secroles: comma-separated string → array
+          const secrolesArray: string[] = typeof secrolesRaw === "string" && secrolesRaw
+            ? secrolesRaw.split(",").map(r => r.trim()).filter(Boolean)
+            : [];
+          
+          // Combine both role sources
+          const allRoles = Array.isArray(nevisRoles) ? [...nevisRoles, ...secrolesArray] : secrolesArray;
+          
+          // Extract role names from "app.role" format (e.g., "support.support" → "support")
+          const extractedRoles: string[] = allRoles
+            .map((roleStr: string) => {
+              const parts = roleStr.split(".");
+              return parts.length > 1 ? parts[parts.length - 1] : roleStr;
+            })
+            .filter(Boolean);
+          
+          console.log("[authOptions] Extracted roles from all sources:", extractedRoles);
+          
+          // Check for legacy role/secrole claims (fallback)
+          const secRole = combined.secrole ?? 
+                          decodedId.secrole ?? 
+                          combined["ch.adnovum.nevis.roles"] ?? 
+                          decodedId["ch.adnovum.nevis.roles"] ??
+                          combined.role ??
+                          decodedId.role;
+          
           const rawScope: string | string[] =
             account.scope ??
             combined.scope ??
@@ -110,11 +158,20 @@ export const authOptions: NextAuthOptions = {
             combined.roles ??
             combined.groups ??
             combined.authorities ??
+            secRole ??
             "";
 
           let tokenScopes: string[] = typeof rawScope === "string"
             ? rawScope.split(" ").filter(Boolean)
             : (rawScope as string[]);
+          
+          // Merge extracted roles into tokenScopes
+          tokenScopes = [...new Set([...tokenScopes, ...extractedRoles])];
+          
+          console.log("[authOptions] Legacy secrole claim:", secRole);
+          console.log("[authOptions] All access token claims:", Object.keys(decodedAccess));
+          console.log("[authOptions] All ID token claims:", Object.keys(decodedId));
+          console.log("[authOptions] Initial tokenScopes after role extraction:", tokenScopes);
 
           // Also call the userinfo endpoint with the access_token — Nevis may
           // include role/scope claims there that are not in the JWT itself.
@@ -187,7 +244,7 @@ export const authOptions: NextAuthOptions = {
           }
 
           token.scopes = tokenScopes;
-          console.log("[authOptions] resolved scopes:", token.scopes);
+          console.log("[authOptions] ✅ Final resolved scopes/roles:", token.scopes);
         } catch (e) {
           console.error("[authOptions] failed to decode token:", e);
           token.scopes = (account.scope ?? "").split(" ").filter(Boolean);

@@ -97,7 +97,7 @@ export async function POST(request: Request) {
         op: "Auth"
       }
     };
-    await fetch(
+    const pushRes = await fetch(
       "https://api.national-digital.getnevis.net/nevisfido/token/dispatch/authentication/",
       {
         method: "POST",
@@ -108,13 +108,20 @@ export async function POST(request: Request) {
         body: JSON.stringify(pushPayload),
       }
     );
+    const pushData = await pushRes.json();
+    console.log("[dispatch-qr-token] Nevis Push response:", JSON.stringify(pushData, null, 2));
+    console.log("[dispatch-qr-token] QR sessionId:", tokenData.sessionId);
+    console.log("[dispatch-qr-token] Push sessionId:", pushData.sessionId);
+    console.log("[dispatch-qr-token] Same session?", tokenData.sessionId === pushData.sessionId);
 
-    // 4️⃣ Return PNG QR code from Nevis response
+    // 4️⃣ Return PNG QR code from Nevis response + BOTH sessionIds for status polling
+    // QR and push create separate sessions, so we need to poll both
     return NextResponse.json({
       dispatcherInformation: {
         response: tokenData.dispatcherInformation.response
       },
-      sessionId: tokenData.token,
+      sessionId: tokenData.sessionId, // QR session (for QR scan)
+      pushSessionId: pushData.sessionId, // Push session (for push approval)
       dispatchTargetId,
       payload: payload,
     });

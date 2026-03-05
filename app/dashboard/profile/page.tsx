@@ -95,6 +95,8 @@ export default function ProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sub: session?.user?.sub,
+          sessionId: qrData.sessionId, // QR sessionId for QR scan
+          pushSessionId: qrData.pushSessionId, // Push sessionId for push approval
           dispatchTargetId,
           name: formData.name,
           given_name: formData.given_name,
@@ -105,6 +107,11 @@ export default function ProfilePage() {
       });
       const updateData = await updateRes.json();
       if (!updateRes.ok) throw new Error(updateData.error || "Profile update failed");
+      
+      // Close QR modal on success
+      setQrPopupOpen(false);
+      setQrBase64(null);
+      
       setEditing(false);
       setSaveMsg("Profile updated successfully ✓");
     } catch (err: any) {

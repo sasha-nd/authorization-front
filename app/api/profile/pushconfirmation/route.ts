@@ -1,57 +1,62 @@
 import { NextResponse } from "next/server";
 
-// Correct endpoint: GET with username + targetId (dispatch targetId, not the QR token UUID)
-// The QR token UUID (tokenData.token) is the FIDO auth token, NOT the status poll identifier.
-// Status polling uses: /nevisfido/token/dispatch/status/?username=X&targetId=Y
-const NEVIS_STATUS_URL = "https://login.national-digital.getnevis.net/nevisfido/token/dispatch/status/";
+// Nevis Status Service documentation:
+// https://docs.nevis.net/nevisfido/reference-guide/uaf-http-api/status-service
+// Endpoint: POST /nevisfido/status
+// Body: {"sessionId": "uuid"}
+// Returns: {"status": "succeeded"|"failed"|"clientAuthenticating"|"tokenCreated"|..., "userId": "...", ...}
+const NEVIS_STATUS_URL = "https://api.national-digital.getnevis.net/nevisfido/status";
 
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
-    // Support both old ?pushId= (UUID) and new ?username=&targetId= params
-    const pushId = url.searchParams.get("pushId");
-    const username = url.searchParams.get("username");
-    const targetId = url.searchParams.get("targetId");
+    const sessionId = url.searchParams.get("sessionId");
 
-    const NEVIS_API_KEY = process.env.NEVIS_API_KEY;
-    if (!NEVIS_API_KEY) throw Error("Nevis API token not configured");
-
-    let fetchUrl: string;
-    if (username && targetId) {
-      fetchUrl = `${NEVIS_STATUS_URL}?username=${username}&targetId=${targetId}`;
-    } else if (pushId) {
-      // Legacy: pushId was used as targetId — try as username+targetId fallback
-      fetchUrl = `${NEVIS_STATUS_URL}?pushId=${pushId}`;
-    } else {
-      throw Error("Missing username+targetId or pushId");
+    if (!sessionId) {
+      return NextResponse.json({ error: "Missing sessionId parameter" }, { status: 400 });
     }
 
-    console.log("[pushconfirmation] calling:", fetchUrl);
+    const NEVIS_API_KEY = process.env.NEVIS_API_KEY;
+    if (!NEVIS_API_KEY) {
+      return NextResponse.json({ error: "Nevis API key not configured" }, { status: 500 });
+    }
 
-    const res = await fetch(fetchUrl, {
+    console.log("[pushconfirmation] Checking status for sessionId:", sessionId);
+
+    const res = await fetch(NEVIS_STATUS_URL, {
+      method: "POST",
       headers: {
-        Authorization: `Bearer ${NEVIS_API_KEY}`,
+        "Authorization": `Bearer ${NEVIS_API_KEY}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
       },
+      body: JSON.stringify({ sessionId }),
     });
 
-    const rawText = await res.text();
-    console.log("[pushconfirmation] HTTP", res.status, "raw:", rawText.slice(0, 500));
-
-    let data: any = null;
-    try {
-      data = JSON.parse(rawText);
-    } catch {
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error("[pushconfirmation] HTTP", res.status, "error:", errorText);
       return NextResponse.json(
-        { error: `Nevis returned non-JSON (HTTP ${res.status})`, body: rawText.slice(0, 300) },
-        { status: 502 }
+        { error: `Nevis API error (HTTP ${res.status})`, details: errorText },
+        { status: res.status }
       );
     }
 
-    console.log("[pushconfirmation] parsed:", data);
-    // Normalize: Nevis returns { status: "approved" | "pending" | ... }
-    // Map to { confirmed: true/false } for frontend compatibility
-    const confirmed = data.status === "approved";
-    return NextResponse.json({ ...data, confirmed });
+    const data = await res.json();
+    console.log("[pushconfirmation] Status response:", data);
+
+    // Map Nevis status to frontend-friendly format
+    // status can be: "succeeded", "failed", "clientAuthenticating", "tokenCreated", "unknown"
+    const confirmed = data.status === "succeeded";
+    const pending = data.status === "clientAuthenticating" || data.status === "tokenCreated";
+    const failed = data.status === "failed" || data.status === "unknown";
+
+    return NextResponse.json({
+      ...data,
+      confirmed,
+      pending,
+      failed,
+    });
   } catch (err: any) {
     console.error("[pushconfirmation] error:", err);
     return NextResponse.json({ error: err.message }, { status: 500 });

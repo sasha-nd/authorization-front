@@ -86,38 +86,60 @@ export default function TransactionsPage() {
       .catch(() => {});
   }, [session?.user?.sub]);
 
-  // Fetch accounts + all transfers (only runs when apiUrl is configured)
+  // Fetch accounts + all transfers (merges local and external API)
   useEffect(() => {
     const userId = session?.user?.sub ?? sessionStorage.getItem("user_id");
-    if (!userId || !apiUrl) return;
+    if (!userId) return;
 
     setLoadingData(true);
-    fetch(`${apiUrl}/users/${userId}/accounts`)
+    
+    // Always fetch local transactions first
+    fetch("/api/transactions")
       .then((r) => r.json())
-      .then(async (accs: Account[]) => {
-        setAccounts(accs);
-        const apiTotal = accs.reduce((s, a) => s + a.current_balance, 0);
-        // Only override the persisted balance if the API returns a real positive value
-        if (apiTotal > 0) {
-          setLocalBalanceCents(apiTotal);
-        }
-        // Collect transfers from all accounts
-        const allTransfers = await Promise.all(
-          accs.map((acc) =>
-            fetch(`${apiUrl}/users/${userId}/accounts/${acc.account_id}/transfers`)
-              .then((r) => r.json())
-              .catch(() => [])
-          )
-        );
-        const flat: Transfer[] = allTransfers.flat();
-        flat.sort(
-          (a, b) =>
-            new Date(b.transfer_date).getTime() - new Date(a.transfer_date).getTime()
-        );
-        setTransfers(flat);
+      .then((data) => {
+        const localTxs: Transfer[] = data.transactions ?? [];
+        setTransfers(localTxs);
       })
-      .catch(() => {})
-      .finally(() => setLoadingData(false));
+      .catch(() => {});
+
+    // Then try external API if configured
+    if (apiUrl) {
+      fetch(`${apiUrl}/users/${userId}/accounts`)
+        .then((r) => r.json())
+        .then(async (accs: Account[]) => {
+          setAccounts(accs);
+          const apiTotal = accs.reduce((s, a) => s + a.current_balance, 0);
+          // Only override the persisted balance if the API returns a real positive value
+          if (apiTotal > 0) {
+            setLocalBalanceCents(apiTotal);
+          }
+          // Collect transfers from all accounts
+          const allTransfers = await Promise.all(
+            accs.map((acc) =>
+              fetch(`${apiUrl}/users/${userId}/accounts/${acc.account_id}/transfers`)
+                .then((r) => r.json())
+                .catch(() => [])
+            )
+          );
+          const externalTxs: Transfer[] = allTransfers.flat();
+          
+          // Merge external with local transactions (avoid duplicates by ID)
+          setTransfers((localTxs) => {
+            const existingIds = new Set(localTxs.map(t => t.transfer_id));
+            const newExternalTxs = externalTxs.filter(t => !existingIds.has(t.transfer_id));
+            const merged = [...localTxs, ...newExternalTxs];
+            merged.sort(
+              (a, b) =>
+                new Date(b.transfer_date).getTime() - new Date(a.transfer_date).getTime()
+            );
+            return merged;
+          });
+        })
+        .catch(() => {})
+        .finally(() => setLoadingData(false));
+    } else {
+      setLoadingData(false);
+    }
   }, [session?.user?.sub, apiUrl]);
 
   const totalBalance =
@@ -185,11 +207,12 @@ export default function TransactionsPage() {
       }
 
       const txSessionId: string = qrData.sessionId;
+      const txPushSessionId: string = qrData.pushSessionId;
       const txTargetId: string = qrData.dispatchTargetId ?? dispatchTargetId;
       setSessionId(txSessionId);
       setPendingConfirmation(true);
 
-      // 3. Poll /api/profile/pushconfirmation?username=X&targetId=Y for confirmed:true
+      // 3. Poll both QR and push sessionIds - user can approve via either method
       const pollUsername = session?.user?.sub ?? "";
       let pollCount = 0;
       const pollInterval = setInterval(async () => {
@@ -202,13 +225,22 @@ export default function TransactionsPage() {
           return;
         }
         try {
-          const statusRes = await fetch(
-            `/api/profile/pushconfirmation?username=${encodeURIComponent(pollUsername)}&targetId=${encodeURIComponent(txTargetId)}`
-          );
-          const statusData = await statusRes.json();
-          console.log(`[poll #${pollCount}] pushconfirmation:`, statusData);
+          // Check both QR session and push session in parallel
+          const checks = [
+            fetch(`/api/profile/pushconfirmation?sessionId=${encodeURIComponent(txSessionId)}`).then(r => r.json()),
+          ];
+          
+          if (txPushSessionId) {
+            checks.push(
+              fetch(`/api/profile/pushconfirmation?sessionId=${encodeURIComponent(txPushSessionId)}`).then(r => r.json())
+            );
+          }
 
-          if (statusData.confirmed === true) {
+          const results = await Promise.all(checks);
+          console.log(`[poll #${pollCount}] pushconfirmation:`, results);
+
+          // If either session is confirmed, proceed
+          if (results.some(data => data.confirmed === true)) {
             clearInterval(pollInterval);
             setQrPopupOpen(false);
             setPendingConfirmation(false);
@@ -219,7 +251,7 @@ export default function TransactionsPage() {
             const amountCents = Math.round(parseFloat(amount) * 100);
             saveBalance((localBalanceCents ?? 0) - amountCents);
 
-            // Add a local transfer row immediately
+            // Add a local transfer row and persist to backend
             const newTx: Transfer = {
               transfer_id: `local-${Date.now()}`,
               type: `Transfer to ${recipient}`,
@@ -227,6 +259,19 @@ export default function TransactionsPage() {
               amount: -amountCents,
               status: "completed",
             };
+            
+            // Persist transaction to backend
+            await fetch("/api/transactions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: `Transfer to ${recipient}`,
+                amount: -amountCents,
+                status: "completed",
+                remarks: remarks || undefined,
+              }),
+            }).catch(() => {});
+            
             setTransfers((prev) => [newTx, ...prev]);
 
             // Try to refresh from API in background (best-effort)

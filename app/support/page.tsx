@@ -3,7 +3,7 @@
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
-import { ArrowLeft, Search, X, ChevronRight } from "lucide-react";
+import { ArrowLeft, Search, X, ChevronRight, RefreshCw } from "lucide-react";
 import LogoutButton from "@/app/components/LogoutButton";
 
 type NevisUser = {
@@ -100,17 +100,23 @@ export default function SupportPage() {
   }, [session, status, router]);
 
   // Load user list
-  useEffect(() => {
+  const loadUsers = () => {
+    setLoadingUsers(true);
+    setError("");
     fetch("/api/support/users")
       .then((r) => r.json())
       .then((data) => {
         const list: NevisUser[] = Array.isArray(data)
           ? data
-          : data.users ?? data.data ?? [];
+          : data.items ?? data.users ?? data.data ?? [];
         setUsers(list);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoadingUsers(false));
+  };
+
+  useEffect(() => {
+    loadUsers();
   }, []);
 
   // Cleanup poll on unmount
@@ -211,10 +217,10 @@ export default function SupportPage() {
       setPollStatus("");
       setPollCount(0);
 
-      const txTargetId: string = data.dispatchTargetId;
-      const txUsername: string = selected.extId;
+      const txSessionId: string = data.sessionId; // QR session
+      const txPushSessionId: string = data.pushSessionId; // Push session
 
-      // 2. Poll /api/profile/pushconfirmation?username=X&targetId=Y for confirmed:true
+      // 2. Poll both QR and push sessions in parallel (QR and push create separate sessions)
       let count = 0;
       pollRef.current = setInterval(async () => {
         count++;
@@ -229,25 +235,36 @@ export default function SupportPage() {
           return;
         }
         try {
-          const statusRes = await fetch(
-            `/api/profile/pushconfirmation?username=${encodeURIComponent(txUsername)}&targetId=${encodeURIComponent(txTargetId)}`
-          );
-          const statusData = await statusRes.json();
+          // Poll both sessions in parallel
+          const checks = [
+            fetch(`/api/profile/pushconfirmation?sessionId=${encodeURIComponent(txSessionId)}`).then(r => r.json())
+          ];
+          if (txPushSessionId) {
+            checks.push(
+              fetch(`/api/profile/pushconfirmation?sessionId=${encodeURIComponent(txPushSessionId)}`).then(r => r.json())
+            );
+          }
+          const results = await Promise.all(checks);
 
-          console.log(`[poll #${count}] pushconfirmation:`, statusData);
-          setPollStatus(statusData.confirmed ? "confirmed" : (statusData.error ?? "waiting"));
-
-          if (statusData.confirmed === true) {
+          console.log(`[poll #${count}] pushconfirmation:`, results);
+          
+          // Check if either QR or push was confirmed
+          if (results.some(data => data.confirmed === true)) {
             clearInterval(pollRef.current!);
             setPendingConfirm(false);
             setQrOpen(false);
+            setPollStatus("confirmed");
 
-            // 3. Execute action after user confirmed
+            // 3. Execute action after user confirmed (via QR scan OR push approval)
             if (mode === "profile") {
               await executeProfileSave();
             } else {
               await executeTransfer();
             }
+          } else {
+            // Set status from first result for display
+            const firstResult = results[0];
+            setPollStatus(firstResult.confirmed ? "confirmed" : (firstResult.error ?? "waiting"));
           }
         } catch (pollErr) {
           console.warn(`[poll #${count}] fetch error:`, pollErr);
@@ -362,6 +379,18 @@ export default function SupportPage() {
                 <X size={12} color="#9CA3AF" />
               </button>
             )}
+            <button
+              onClick={loadUsers}
+              disabled={loadingUsers}
+              className="p-1 hover:bg-gray-100 rounded transition-colors disabled:opacity-50"
+              title="Refresh user list"
+            >
+              <RefreshCw 
+                size={14} 
+                color="#9CA3AF" 
+                className={loadingUsers ? "animate-spin" : ""}
+              />
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -385,10 +414,10 @@ export default function SupportPage() {
                   }}
                 >
                   <div className="flex flex-col items-start" style={{ gap: 2 }}>
-                    <span className="font-medium" style={{ fontSize: 13, color: "#0B1220" }}>
+                    <span className="font-bold" style={{ fontSize: 14, color: "#000000" }}>
                       {u.name ?? u.loginId ?? u.extId}
                     </span>
-                    <span style={{ fontSize: 11, color: "#9CA3AF" }}>
+                    <span style={{ fontSize: 11, color: "#6B7280" }}>
                       {u.email ?? u.extId}
                     </span>
                   </div>

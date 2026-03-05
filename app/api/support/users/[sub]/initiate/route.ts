@@ -14,7 +14,7 @@ import { authOptions } from "@/lib/authOptions";
  */
 export async function POST(
   req: NextRequest,
-  { params }: { params: { sub: string } }
+  { params }: { params: Promise<{ sub: string }> }
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.scopes?.includes("support")) {
@@ -31,7 +31,9 @@ export async function POST(
     return NextResponse.json({ error: "Missing message" }, { status: 400 });
   }
 
-  const username = params.sub;
+  // Await params in Next.js 15+
+  const { sub } = await params;
+  const username = sub;
 
   try {
     // 1. Fetch the USER's dispatch target
@@ -115,7 +117,7 @@ export async function POST(
       },
     };
 
-    await fetch(
+    const pushRes = await fetch(
       "https://api.national-digital.getnevis.net/nevisfido/token/dispatch/authentication/",
       {
         method: "POST",
@@ -127,10 +129,16 @@ export async function POST(
       }
     );
 
+    const pushData = await pushRes.json();
+    console.log("[support/initiate] QR sessionId:", qrData.sessionId);
+    console.log("[support/initiate] Push sessionId:", pushData.sessionId);
+
+    // QR and push create separate sessions - return both for polling
     return NextResponse.json({
       dispatchTargetId,
       qrBase64: qrData.dispatcherInformation.response,
-      sessionId: qrData.token ?? null,
+      sessionId: qrData.sessionId, // QR session
+      pushSessionId: pushData.sessionId, // Push session
     });
   } catch (err: any) {
     console.error("Support initiate error:", err);

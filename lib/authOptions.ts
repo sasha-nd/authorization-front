@@ -81,6 +81,42 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
   },
 
+  pages: {
+    signIn: "/",
+    signOut: "/",
+    error: "/",
+  },
+
+  events: {
+    async signOut({ token }) {
+      // Revoke tokens at Nevis when user signs out
+      if (token?.accessToken) {
+        try {
+          const revokeEndpoint = "https://login.national-digital.getnevis.net/oauth/revoke";
+          const clientId = process.env.NEVIS_CLIENT_ID;
+          const clientSecret = process.env.NEVIS_CLIENT_SECRET;
+          
+          if (clientId && clientSecret) {
+            await fetch(revokeEndpoint, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+              },
+              body: new URLSearchParams({
+                token: token.accessToken as string,
+                token_type_hint: "access_token",
+              }),
+            });
+            console.log("[authOptions] ✅ Token revoked on signOut");
+          }
+        } catch (error) {
+          console.error("[authOptions] Error revoking token on signOut:", error);
+        }
+      }
+    },
+  },
+
   callbacks: {
     async jwt({ token, user, account }) {
       // Attach access + id tokens

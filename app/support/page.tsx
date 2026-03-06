@@ -192,6 +192,35 @@ export default function SupportPage() {
       return;
     }
 
+    // ── For transfers: check if user has sufficient balance ──
+    if (mode === "transfer") {
+      const amountCents = Math.round(parseFloat(txAmount) * 100);
+      if (isNaN(amountCents) || amountCents <= 0) {
+        setActionMsg("⛔ Please enter a valid amount.");
+        return;
+      }
+
+      try {
+        const balanceRes = await fetch(`/api/support/balance?sub=${encodeURIComponent(selected.extId)}`);
+        const balanceData = await balanceRes.json();
+        
+        if (!balanceRes.ok) {
+          setActionMsg("⛔ Failed to check user balance.");
+          return;
+        }
+
+        const balanceCents = balanceData.balanceCents || 0;
+        if (balanceCents < amountCents) {
+          const balanceDollars = (balanceCents / 100).toFixed(2);
+          setActionMsg(`⛔ Insufficient funds. User has $${balanceDollars} but transfer requires $${txAmount}.`);
+          return;
+        }
+      } catch (e: any) {
+        setActionMsg("⛔ Error checking balance: " + e.message);
+        return;
+      }
+    }
+
     const message =
       mode === "profile"
         ? `Support request: approve modification of your profile properties`
@@ -614,12 +643,17 @@ export default function SupportPage() {
                       >
                         <span className="font-mono-jetbrains font-medium" style={{ fontSize: 14, color: "#111827" }}>$</span>
                         <input
-                          type="number"
-                          min="0"
-                          step="0.01"
+                          type="text"
+                          inputMode="decimal"
                           placeholder="0.00"
                           value={txAmount}
-                          onChange={(e) => setTxAmount(e.target.value)}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            // Allow only numbers with up to 2 decimal places
+                            if (value === "" || /^\d+(\.\d{0,2})?$/.test(value)) {
+                              setTxAmount(value);
+                            }
+                          }}
                           disabled={acting}
                           className="flex-1 bg-white outline-none font-mono-jetbrains"
                           style={{ fontSize: 13, color: "#111827" }}

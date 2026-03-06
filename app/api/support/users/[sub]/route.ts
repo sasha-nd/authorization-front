@@ -204,24 +204,57 @@ export async function PATCH(
     
     const currentUser = await getUserRes.json();
     
+    console.log("[support/users/detail] Current user:", currentUser);
+    console.log("[support/users/detail] Updates received:", updates);
+    
     // Build payload using the NESTED structure that NevisIDM Core API expects
     const patchPayload: any = {
       version: currentUser.version, // Required for optimistic locking
     };
     
-    // Use nested objects matching the GET response structure
-    if (updates.given_name !== undefined || updates.family_name !== undefined) {
+    // Check if name fields changed (given_name or family_name)
+    const currentFirstName = currentUser.name?.firstName || "";
+    const currentFamilyName = currentUser.name?.familyName || "";
+    const newFirstName = updates.given_name?.trim() || "";
+    const newFamilyName = updates.family_name?.trim() || "";
+    
+    if (newFirstName !== currentFirstName || newFamilyName !== currentFamilyName) {
       patchPayload.name = {
-        firstName: updates.given_name ?? currentUser.name?.firstName,
-        familyName: updates.family_name ?? currentUser.name?.familyName,
+        firstName: newFirstName || currentFirstName,
+        familyName: newFamilyName || currentFamilyName,
       };
+      console.log("[support/users/detail] Name changed - adding to payload:", patchPayload.name);
     }
     
-    if (updates.email !== undefined || updates.phone_number !== undefined) {
+    // Check if contact fields changed (email or phone_number)
+    const currentEmail = currentUser.contacts?.email || "";
+    const currentPhone = currentUser.contacts?.telephone || "";
+    const newEmail = updates.email?.trim() || "";
+    const newPhone = updates.phone_number?.trim() || "";
+    
+    if (newEmail !== currentEmail || newPhone !== currentPhone) {
       patchPayload.contacts = {
-        email: updates.email ?? currentUser.contacts?.email,
-        telephone: updates.phone_number ?? currentUser.contacts?.telephone,
+        email: newEmail || currentEmail,
+        telephone: newPhone || currentPhone,
       };
+      console.log("[support/users/detail] Contacts changed - adding to payload:", patchPayload.contacts);
+    }
+    
+    // Check if address changed
+    const currentAddress = currentUser.address?.addressline1 || "";
+    const newAddress = updates.address?.trim() || "";
+    
+    if (newAddress !== currentAddress) {
+      patchPayload.address = {
+        addressline1: newAddress || currentAddress,
+      };
+      console.log("[support/users/detail] Address changed - adding to payload:", patchPayload.address);
+    }
+    
+    // If nothing changed, don't send the request
+    if (Object.keys(patchPayload).length === 1) {
+      console.log("[support/users/detail] No changes detected, skipping PATCH");
+      return NextResponse.json({ success: true, message: "No changes to save" });
     }
     
     console.log("[support/users/detail] PATCH request to:", getUserUrl, "with payload:", patchPayload);

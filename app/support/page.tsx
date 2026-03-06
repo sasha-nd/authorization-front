@@ -154,7 +154,18 @@ export default function SupportPage() {
   }
 
   function handleFieldChange(name: string, val: string) {
-    setEditData((prev) => ({ ...prev, [name]: val }));
+    setEditData((prev) => {
+      const updated = { ...prev, [name]: val };
+      
+      // Auto-update the display name when given_name or family_name changes
+      if (name === "given_name" || name === "family_name") {
+        const firstName = name === "given_name" ? val : prev.given_name || "";
+        const lastName = name === "family_name" ? val : prev.family_name || "";
+        updated.name = `${firstName} ${lastName}`.trim();
+      }
+      
+      return updated;
+    });
   }
 
   function resetAction() {
@@ -564,8 +575,8 @@ export default function SupportPage() {
                   </p>
 
                   <div className="grid grid-cols-2" style={{ gap: 14 }}>
-                    <Field label="Login ID" name="loginId" value={editData.loginId} editing={!acting} onChange={handleFieldChange} />
-                    <Field label="Full Name" name="name" value={editData.name} editing={!acting} onChange={handleFieldChange} />
+                    <Field label="Login ID" name="loginId" value={editData.loginId} editing={false} onChange={handleFieldChange} />
+                    <Field label="Full Name (auto)" name="name" value={editData.name} editing={false} onChange={handleFieldChange} />
                     <Field label="Given Name" name="given_name" value={editData.given_name} editing={!acting} onChange={handleFieldChange} />
                     <Field label="Family Name" name="family_name" value={editData.family_name} editing={!acting} onChange={handleFieldChange} />
                     <Field label="Email" name="email" value={editData.email} editing={!acting} onChange={handleFieldChange} />

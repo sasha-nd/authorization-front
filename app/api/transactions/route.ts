@@ -53,6 +53,8 @@ export async function POST(req: NextRequest) {
     from_account_id: body.from_account_id,
     to_account_id: body.to_account_id,
     remarks: body.remarks,
+    supportInitiated: body.supportInitiated,
+    supportTimestamp: body.supportTimestamp,
   };
 
   const updated = addTransaction(sub, transaction);

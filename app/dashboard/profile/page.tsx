@@ -70,6 +70,14 @@ export default function ProfilePage() {
       setSaveMsg("Dispatch target not loaded yet. Please try again.");
       return;
     }
+    // Validate phone format before sending (NevisIDM requires: +/00 prefix for international, or 0 prefix for local)
+    if (formData.phone && formData.phone.trim()) {
+      const phoneRegex = /^(\+|00)(\d ?(\d ?){0,14}|\d{2} ?(\d ?){0,13}|\d{3} ?(\d ?){0,12})$|^0(\d ?){0,13}$/;
+      if (!phoneRegex.test(formData.phone.trim())) {
+        setSaveMsg("Invalid phone format. Use international format (e.g. +41 44 123 45 67) or local format starting with 0.");
+        return;
+      }
+    }
     setSaving(true);
     setSaveMsg("");
     try {

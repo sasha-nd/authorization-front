@@ -232,11 +232,14 @@ export async function PATCH(
     const newEmail = updates.email?.trim() || "";
     const newPhone = updates.phone_number?.trim() || "";
     
-    if (newEmail !== currentEmail || newPhone !== currentPhone) {
-      patchPayload.contacts = {
-        email: newEmail || currentEmail,
-        telephone: newPhone || currentPhone,
-      };
+    // Only include fields that ACTUALLY changed — don't re-send unchanged fields
+    // (re-sending an existing phone value can fail if it doesn't match NevisIDM's current regex)
+    const contacts: any = {};
+    if (newEmail && newEmail !== currentEmail) contacts.email = newEmail;
+    if (newPhone && newPhone !== currentPhone) contacts.telephone = newPhone;
+    
+    if (Object.keys(contacts).length > 0) {
+      patchPayload.contacts = contacts;
       console.log("[support/users/detail] Contacts changed - adding to payload:", patchPayload.contacts);
     }
     

@@ -14,6 +14,8 @@ export type Transaction = {
   from_account_id?: string;
   to_account_id?: string;
   remarks?: string;
+  supportInitiated?: boolean; // true if this transaction was made by a support agent
+  supportTimestamp?: string;  // ISO timestamp of when support initiated the action
 };
 
 // Module-level singleton — survives across requests within the same Node process

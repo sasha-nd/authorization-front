@@ -13,6 +13,9 @@ type Transfer = {
   status: string;
   from_account_id?: string;
   to_account_id?: string;
+  remarks?: string;
+  supportInitiated?: boolean;
+  supportTimestamp?: string;
 };
 
 type Account = {
@@ -418,23 +421,59 @@ export default function TransactionsPage() {
             return (
               <div
                 key={tx.transfer_id}
-                className="flex items-center"
-                style={{ height: 44, padding: "0 12px", borderBottom: "1px solid #E6E8EC" }}
+                style={{ borderBottom: "1px solid #E6E8EC" }}
               >
-                <span style={{ fontSize: 13, color: "#0B1220", flex: 1 }}>{tx.type}</span>
-                <span
-                  className="font-mono-jetbrains"
-                  style={{ fontSize: 12, color: "#6B7280", width: 160 }}
+                <div
+                  className="flex items-center"
+                  style={{ height: 44, padding: "0 12px" }}
                 >
-                  {tx.transfer_date?.slice(0, 10)}
-                </span>
-                <span style={{ fontSize: 12, color: "#6B7280", width: 120 }}>{tx.status}</span>
-                <span
-                  className="font-mono-jetbrains font-medium text-right"
-                  style={{ fontSize: 13, color: positive ? "#047857" : "#B91C1C", width: 120 }}
-                >
-                  {positive ? "+" : "−"}{formatCents(tx.amount)}
-                </span>
+                  <span style={{ fontSize: 13, color: "#0B1220", flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
+                    {tx.supportInitiated && (
+                      <span
+                        title={`Initiated via Support on ${tx.supportTimestamp ? new Date(tx.supportTimestamp).toLocaleString() : tx.transfer_date?.slice(0, 10)}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: 18,
+                          height: 18,
+                          borderRadius: "50%",
+                          backgroundColor: "#FEE2E2",
+                          color: "#DC2626",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          flexShrink: 0,
+                        }}
+                      >
+                        !
+                      </span>
+                    )}
+                    {tx.type}
+                  </span>
+                  <span
+                    className="font-mono-jetbrains"
+                    style={{ fontSize: 12, color: "#6B7280", width: 160 }}
+                  >
+                    {tx.transfer_date?.slice(0, 10)}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#6B7280", width: 120 }}>{tx.status}</span>
+                  <span
+                    className="font-mono-jetbrains font-medium text-right"
+                    style={{ fontSize: 13, color: positive ? "#047857" : "#B91C1C", width: 120 }}
+                  >
+                    {positive ? "+" : "−"}{formatCents(tx.amount)}
+                  </span>
+                </div>
+                {tx.supportInitiated && (
+                  <div style={{ padding: "0 12px 6px 12px", display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 600 }}>
+                      ⚠ Via Support
+                    </span>
+                    <span style={{ fontSize: 11, color: "#9CA3AF" }}>
+                      — {tx.supportTimestamp ? new Date(tx.supportTimestamp).toLocaleString() : tx.transfer_date?.slice(0, 10)}
+                    </span>
+                  </div>
+                )}
               </div>
             );
           })

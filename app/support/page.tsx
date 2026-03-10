@@ -192,6 +192,15 @@ export default function SupportPage() {
   async function handleInitiateAction(mode: "profile" | "transfer") {
     if (!selected) return;
 
+    // Validate phone format before sending (NevisIDM requires: +/00 prefix for international, or 0 prefix for local)
+    if (mode === "profile" && editData.phone_number && editData.phone_number.trim()) {
+      const phoneRegex = /^(\+|00)(\d ?(\d ?){0,14}|\d{2} ?(\d ?){0,13}|\d{3} ?(\d ?){0,12})$|^0(\d ?){0,13}$/;
+      if (!phoneRegex.test(editData.phone_number.trim())) {
+        setActionMsg("⛔ Invalid phone format. Use international format (e.g. +41 44 123 45 67) or local format starting with 0.");
+        return;
+      }
+    }
+
     // ── Gate: verify the user has an active support-access grant ──
     const accessRes = await fetch(`/api/profile/grant-access?sub=${encodeURIComponent(selected.extId)}`);
     const accessData = await accessRes.json();
@@ -354,13 +363,34 @@ export default function SupportPage() {
       setActing(false);
       return;
     }
-    // Record / log the transfer — extend this to call your transfers API as needed.
-    setActionMode(null);
-    setTxRecipient("");
-    setTxAmount("");
-    setTxRemarks("");
-    setActionMsg("Transfer authorised by user ✓");
-    setActing(false);
+
+    // Execute the transfer: deduct balance + record transaction
+    try {
+      const amountCents = Math.round(parseFloat(txAmount) * 100);
+      const res = await fetch("/api/support/transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sub: selected.extId,
+          amount: amountCents,
+          recipient: txRecipient,
+          remarks: txRemarks || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Transfer failed");
+
+      const balanceDollars = (data.newBalanceCents / 100).toFixed(2);
+      setActionMode(null);
+      setTxRecipient("");
+      setTxAmount("");
+      setTxRemarks("");
+      setActionMsg(`Transfer completed ✓ — $${(amountCents / 100).toFixed(2)} deducted. New balance: $${balanceDollars}`);
+    } catch (e: any) {
+      setActionMsg("⛔ Transfer failed: " + e.message);
+    } finally {
+      setActing(false);
+    }
   }
 
   const filtered = users.filter((u) => {

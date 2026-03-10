@@ -152,22 +152,34 @@ export const authOptions: NextAuthOptions = {
           // Fall back to the scope claim inside the access_token or ID token.
           const combined = { ...decodedId, ...decodedAccess };
           
-          // Extract roles from nevisAuth session variable: ${sess:ch.nevis.session.secroles}
-          // This is configured in the Authorization Server to include user roles in tokens.
-          // The secroles claim contains a comma-separated list like: "Main,nevisIdm.SelfAdmin,support.support"
+          // Extract roles from token claims.
+          // Nevis may include roles in different claims depending on configuration:
+          // - "roles": comma-separated string like "Main,support.support,nevisIdm.SelfAdmin"
+          // - "secroles": from ${sess:ch.nevis.session.secroles}
+          // - "urn:nevis:roles": array of role strings
           const nevisRoles = combined["urn:nevis:roles"] ?? decodedId["urn:nevis:roles"] ?? [];
           const secrolesRaw = combined["secroles"] ?? decodedAccess["secroles"] ?? "";
+          const rolesClaimRaw = combined["roles"] ?? decodedAccess["roles"] ?? "";
           
           console.log("[authOptions] urn:nevis:roles claim:", nevisRoles);
           console.log("[authOptions] secroles claim:", secrolesRaw);
+          console.log("[authOptions] roles claim:", rolesClaimRaw);
           
-          // Parse secroles: comma-separated string → array
+          // Parse all role sources: comma-separated strings → arrays
           const secrolesArray: string[] = typeof secrolesRaw === "string" && secrolesRaw
             ? secrolesRaw.split(",").map(r => r.trim()).filter(Boolean)
             : [];
           
-          // Combine both role sources
-          const allRoles = Array.isArray(nevisRoles) ? [...nevisRoles, ...secrolesArray] : secrolesArray;
+          const rolesClaimArray: string[] = typeof rolesClaimRaw === "string" && rolesClaimRaw
+            ? rolesClaimRaw.split(",").map(r => r.trim()).filter(Boolean)
+            : [];
+          
+          // Combine all role sources
+          const allRoles = [
+            ...(Array.isArray(nevisRoles) ? nevisRoles : []),
+            ...secrolesArray,
+            ...rolesClaimArray,
+          ];
           
           // Extract role names from "app.role" format (e.g., "support.support" → "support")
           const extractedRoles: string[] = allRoles

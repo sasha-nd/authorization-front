@@ -1,7 +1,15 @@
 const https = require('https');
 
-const clientId = '16400b2c6b5696c619278e244b288b99';
-const clientSecret = '7d7d48b5b76d9be08fb4d9ced2579a86';
+// Use environment variables for credentials. Falls back to NEVIS_CLIENT_* if IdM-specific
+// env vars are not present.
+const clientId = process.env.NEVISIDM_CLIENT_ID || process.env.NEVIS_CLIENT_ID;
+const clientSecret = process.env.NEVISIDM_CLIENT_SECRET || process.env.NEVIS_CLIENT_SECRET;
+
+if (!clientId || !clientSecret) {
+  console.error('Missing NEVISIDM_CLIENT_ID / NEVISIDM_CLIENT_SECRET (or NEVIS_CLIENT_ID / NEVIS_CLIENT_SECRET) in environment');
+  process.exit(1);
+}
+
 const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
 const tokenReq = https.request({
